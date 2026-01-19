@@ -15,10 +15,10 @@ GPUS="${GPUS:-0,1,2,3,4,5,6,7}"
 # Format: <model_key>|<name_or_path>|<tensor_parallel_size>|<max_num_seqs>
 # -------------------------
 MODEL_SPECS=(
-  "ds_r1_qwen_1p5b|huggingface_models/DeepSeek-R1-Distill-Qwen-1.5B|1|256"
-  "qwen2p5_3b|huggingface_models/Qwen2.5-3B-Instruct|1|256"
+  # "ds_r1_qwen_1p5b|huggingface_models/DeepSeek-R1-Distill-Qwen-1.5B|1|256"
+  # "qwen2p5_3b|huggingface_models/Qwen2.5-3B-Instruct|1|256"
   "ds_r1_qwen_7b|huggingface_models/DeepSeek-R1-Distill-Qwen-7B|1|128"
-  "qwen2p5_7b|huggingface_models/Qwen2.5-7B-Instruct|1|128"
+  # "qwen2p5_7b|huggingface_models/Qwen2.5-7B-Instruct|1|128"
 )
 
 # -------------------------
@@ -43,6 +43,25 @@ DATASET_SPECS=(
   # "gsm8k|gsm8k_0shot|train|test|100|null|2048|4096"
   # "commonsense_qa|arc_0shot|train|validation|100|null|1024|4096" # 9k 1k
 )
+
+# Optional overrides for the specs above (accepts comma- or newline-separated entries).
+if [[ -n "${MODEL_SPECS_OVERRIDE:-}" ]]; then
+  MODEL_SPECS=()
+  while IFS= read -r line; do
+    line="$(echo "${line}" | xargs)"
+    [[ -z "${line}" ]] && continue
+    MODEL_SPECS+=( "${line}" )
+  done <<< "$(printf "%s\n" "${MODEL_SPECS_OVERRIDE}" | tr ',' '\n')"
+fi
+
+if [[ -n "${DATASET_SPECS_OVERRIDE:-}" ]]; then
+  DATASET_SPECS=()
+  while IFS= read -r line; do
+    line="$(echo "${line}" | xargs)"
+    [[ -z "${line}" ]] && continue
+    DATASET_SPECS+=( "${line}" )
+  done <<< "$(printf "%s\n" "${DATASET_SPECS_OVERRIDE}" | tr ',' '\n')"
+fi
 # DATASET_SPECS=(
 #   "math500|math_0shot|test|test|10|10|16384|16384"
 #   "aime_2024|math_0shot|train|train|10|10|16384|16384"

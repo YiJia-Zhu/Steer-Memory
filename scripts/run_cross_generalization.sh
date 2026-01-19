@@ -8,13 +8,14 @@ set -euo pipefail
 #
 # Quickstart:
 #   GPU=0 bash ./scripts/run_cross_generalization.sh
+#   PREP_WITH_MAIN=0 GPU=0 bash ./scripts/run_cross_generalization.sh
 #   SKIP_OFFLINE=1 ARTIFACT_RUN_ID=latest GPU=0 bash ./scripts/run_cross_generalization.sh
 
 # =========================
 # User-editable (top)
 # =========================
 # <model_key>|<name_or_path>|<tensor_parallel_size>|<max_num_seqs>
-MODEL_SPEC="${MODEL_SPEC:-ds_r1_qwen_1p5b|huggingface_models/DeepSeek-R1-Distill-Qwen-7B|1|256}"
+MODEL_SPEC="${MODEL_SPEC:-ds_r1_qwen_7b|huggingface_models/DeepSeek-R1-Distill-Qwen-7B|1|256}"
 
 # Base config template.
 BASE_CFG="${BASE_CFG:-configs/default}"
@@ -27,6 +28,10 @@ CHOSEN_PARAMS_TIER="${CHOSEN_PARAMS_TIER:-high}"
 RUN_NAME_PREFIX="${RUN_NAME_PREFIX:-generalization}"
 EXP_ID="${EXP_ID:-$(date +%Y%m%d_%H%M%S)}"
 # Which offline run_id to use when loading memory for eval (default: same as offline run_id).
+ARTIFACT_RUN_ID_WAS_SET=0
+if [[ -n "${ARTIFACT_RUN_ID+x}" ]]; then
+  ARTIFACT_RUN_ID_WAS_SET=1
+fi
 ARTIFACT_RUN_ID="${ARTIFACT_RUN_ID:-${EXP_ID}}"
 
 # Runtime controls.
@@ -38,6 +43,16 @@ INCLUDE_SELF="${INCLUDE_SELF:-0}"   # Set to 1 to also evaluate src->src.
 SKIP_OFFLINE="${SKIP_OFFLINE:-0}"   # Set to 1 to reuse existing offline artifacts.
 DRY_RUN="${DRY_RUN:-0}"
 OUT_CFG_DIR="${OUT_CFG_DIR:-configs/_generalization_generated/${EXP_ID}}"
+
+# Pre-run main_experiments to regenerate memories for the chosen model/datasets.
+PREP_WITH_MAIN="${PREP_WITH_MAIN:-1}"
+USE_MAIN_ARTIFACTS="${USE_MAIN_ARTIFACTS:-${PREP_WITH_MAIN}}"
+MAIN_RUN_NAME_PREFIX="${MAIN_RUN_NAME_PREFIX:-main}"
+MAIN_STAGES="${MAIN_STAGES:-mine,select,memory}"
+MAIN_EXP_ID="${MAIN_EXP_ID:-${EXP_ID}}"
+MAIN_MODEL_SPEC="${MAIN_MODEL_SPEC:-${MODEL_SPEC}}"
+MAIN_GPUS="${MAIN_GPUS:-${GPU}}"
+MAIN_SCRIPT="${MAIN_SCRIPT:-scripts/run_main_experiments.sh}"
 
 # Optional: force conda.
 USE_CONDA_RUN="${USE_CONDA_RUN:-0}"
@@ -59,8 +74,11 @@ export TOKENIZERS_PARALLELISM=false
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [[ "${MAIN_SCRIPT}" != /* ]]; then
+  MAIN_SCRIPT="${REPO_ROOT}/${MAIN_SCRIPT}"
+fi
 
-PY=(/opt/conda/envs/easysteer/bin/python)
+PY=(python)
 if [[ "${USE_CONDA_RUN}" == "1" ]]; then
   PY=(conda run -n "${CONDA_ENV}" python)
 fi
@@ -136,6 +154,17 @@ MODEL_KEY="$(sanitize "${MODEL_KEY:-${MODEL_PATH}}")"
 MODEL_BASENAME="$(basename "${MODEL_PATH}")"
 MODEL_TP="${MODEL_TP:-1}"
 MODEL_MAX_NUM_SEQS="${MODEL_MAX_NUM_SEQS:-__KEEP__}"
+IFS='|' read -r MAIN_MODEL_KEY MAIN_MODEL_PATH MAIN_MODEL_TP MAIN_MODEL_MAX_NUM_SEQS <<< "${MAIN_MODEL_SPEC}"
+if [[ -z "${MAIN_MODEL_PATH}" ]]; then
+  MAIN_MODEL_PATH="${MODEL_PATH}"
+fi
+if [[ -z "${MAIN_MODEL_KEY}" ]]; then
+  MAIN_MODEL_KEY="${MODEL_KEY}"
+fi
+MAIN_MODEL_KEY="$(sanitize "${MAIN_MODEL_KEY:-${MAIN_MODEL_PATH}}")"
+if [[ "${USE_MAIN_ARTIFACTS}" == "1" && "${ARTIFACT_RUN_ID_WAS_SET}" == "0" ]]; then
+  ARTIFACT_RUN_ID="${MAIN_EXP_ID}"
+fi
 
 METHODS=()
 if [[ "${RUN_GREEDY}" != "0" ]]; then
@@ -151,6 +180,10 @@ fi
 METHODS_CSV="$(IFS=','; echo "${METHODS[*]}")"
 
 mkdir -p "${OUT_CFG_DIR}"
+if [[ "${USE_MAIN_ARTIFACTS}" == "1" && "${SKIP_OFFLINE}" != "1" ]]; then
+  echo "[info] USE_MAIN_ARTIFACTS=1 -> skipping offline stages in this script (memories will come from run_main_experiments)" >&2
+  SKIP_OFFLINE=1
+fi
 
 mapfile -t __param_rows < <(CHOSEN_PARAMS_CSV="${CHOSEN_PARAMS_CSV}" MODEL_NAME="${MODEL_BASENAME}" CHOSEN_PARAMS_TIER="${CHOSEN_PARAMS_TIER}" "${PY[@]}" - <<'PY'
 import os
@@ -259,6 +292,54 @@ for entry in "${grid_choice[@]}"; do
   echo "  - ${ds}: ${dir}"
 done
 echo
+
+if [[ "${PREP_WITH_MAIN}" == "1" ]]; then
+  if [[ "${USE_MAIN_ARTIFACTS}" != "1" ]]; then
+    echo "[warn] PREP_WITH_MAIN=1 but USE_MAIN_ARTIFACTS=0; main run will not be reused" >&2
+  fi
+  if [[ ! -x "${MAIN_SCRIPT}" ]]; then
+    echo "[error] MAIN_SCRIPT not found or not executable: ${MAIN_SCRIPT}" >&2
+    exit 2
+  fi
+
+  dataset_override="$(printf "%s\n" "${DATASET_SPECS[@]}")"
+  main_model_override_escaped="$(printf "%q" "${MAIN_MODEL_SPEC}")"
+  dataset_override_escaped="$(printf "%q" "${dataset_override}")"
+  main_gpus_escaped="$(printf "%q" "${MAIN_GPUS}")"
+  main_stages_escaped="$(printf "%q" "${MAIN_STAGES}")"
+  main_run_prefix_escaped="$(printf "%q" "${MAIN_RUN_NAME_PREFIX}")"
+  main_exp_id_escaped="$(printf "%q" "${MAIN_EXP_ID}")"
+  base_cfg_escaped="$(printf "%q" "${BASE_CFG}")"
+  chosen_params_csv_escaped="$(printf "%q" "${CHOSEN_PARAMS_CSV}")"
+  chosen_params_tier_escaped="$(printf "%q" "${CHOSEN_PARAMS_TIER}")"
+  run_greedy_escaped="$(printf "%q" "${RUN_GREEDY}")"
+  run_esm_escaped="$(printf "%q" "${RUN_ESM}")"
+  use_conda_run_escaped="$(printf "%q" "${USE_CONDA_RUN}")"
+  conda_env_escaped="$(printf "%q" "${CONDA_ENV}")"
+
+  main_cmd="cd \"${REPO_ROOT}\""
+  main_cmd+=" && MODEL_SPECS_OVERRIDE=${main_model_override_escaped}"
+  main_cmd+=" DATASET_SPECS_OVERRIDE=${dataset_override_escaped}"
+  main_cmd+=" GPUS=${main_gpus_escaped}"
+  main_cmd+=" STAGES=${main_stages_escaped}"
+  main_cmd+=" RUN_NAME_PREFIX=${main_run_prefix_escaped}"
+  main_cmd+=" EXP_ID=${main_exp_id_escaped}"
+  main_cmd+=" BASE_CFG=${base_cfg_escaped}"
+  main_cmd+=" CHOSEN_PARAMS_CSV=${chosen_params_csv_escaped}"
+  main_cmd+=" CHOSEN_PARAMS_TIER=${chosen_params_tier_escaped}"
+  main_cmd+=" RUN_GREEDY=${run_greedy_escaped}"
+  main_cmd+=" RUN_ESM=${run_esm_escaped}"
+  main_cmd+=" USE_CONDA_RUN=${use_conda_run_escaped}"
+  main_cmd+=" CONDA_ENV=${conda_env_escaped}"
+  main_cmd+=" bash \"${MAIN_SCRIPT}\""
+
+  echo "[prep] running run_main_experiments to regenerate memories (exp_id=${MAIN_EXP_ID}, run_prefix=${MAIN_RUN_NAME_PREFIX})"
+  if [[ "${DRY_RUN}" == "1" ]]; then
+    echo "[dry-run][prep] ${main_cmd}"
+  else
+    bash -lc "${main_cmd}"
+  fi
+fi
 
 write_cfg() {
   local out_cfg="$1"
@@ -376,6 +457,7 @@ PY
 echo "[mode] cross generalization"
 echo "[model] ${MODEL_PATH} (key=${MODEL_KEY}, tp=${MODEL_TP}, max_num_seqs=${MODEL_MAX_NUM_SEQS})"
 echo "[datasets] ${DATASET_LIST[*]}"
+echo "[main prep] prep_with_main=${PREP_WITH_MAIN} use_main_artifacts=${USE_MAIN_ARTIFACTS} main_exp_id=${MAIN_EXP_ID} main_run_prefix=${MAIN_RUN_NAME_PREFIX}"
 echo "[base_cfg] ${BASE_CFG}"
 echo "[exp_id / offline run_id] ${EXP_ID}"
 echo "[artifact_run_id for eval] ${ARTIFACT_RUN_ID}"
@@ -404,6 +486,17 @@ for ds in "${DATASET_LIST[@]}"; do
   fi
 
   ds_key="$(sanitize "${dataset}")"
+  if [[ "${USE_MAIN_ARTIFACTS}" == "1" ]]; then
+    run_name="${MAIN_RUN_NAME_PREFIX}_${MAIN_MODEL_KEY}_${ds_key}"
+    OFFLINE_RUN_MAP["${dataset}"]="${run_name}"
+    if [[ "${DRY_RUN}" == "1" ]]; then
+      echo "[dry-run][offline-reuse] ${dataset}: use ${run_name} (artifact_run_id=${ARTIFACT_RUN_ID})"
+    else
+      echo "[reuse offline] ${dataset}: ${run_name} (artifact_run_id=${ARTIFACT_RUN_ID})"
+    fi
+    continue
+  fi
+
   run_name="${RUN_NAME_PREFIX}_${MODEL_KEY}_offline_${ds_key}"
   cfg_path="${OUT_CFG_DIR}/${run_name}.yaml"
   write_cfg "${cfg_path}" "${run_name}" "${dataset}" "${prompt_template}" "${train_split}" "${eval_split}" \
