@@ -18,7 +18,7 @@ model:
   enforce_eager: true
   enable_chunked_prefill: false
   dtype: "bfloat16"
-  gpu_memory_utilization: 0.8
+  gpu_memory_utilization: 0.9
   max_model_len: 16384
   max_num_seqs: 256
 
