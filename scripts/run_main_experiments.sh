@@ -1,0 +1,623 @@
+#!/usr/bin/env bash
+set -euo pipefail
+set -m
+# Only baseline
+# RUN_GREEDY=1 RUN_ESM=0 STAGES=eval bash ./scripts/run_main_experiments.sh 
+# =========================
+# User-editable (TOP)
+# =========================
+# GPUs to use for parallel runs (one job per GPU). Edit as needed.
+GPUS="${GPUS:-0,1,2,3,4,5,6,7}"
+# GPUS="${GPUS:-0}"
+
+# -------------------------
+# Models to run
+# Format: <model_key>|<name_or_path>|<tensor_parallel_size>|<max_num_seqs>
+# -------------------------
+MODEL_SPECS=(
+  "ds_r1_qwen_1p5b|huggingface_models/DeepSeek-R1-Distill-Qwen-1.5B|1|256"
+  "qwen2p5_3b|huggingface_models/Qwen2.5-3B-Instruct|1|256"
+  "ds_r1_qwen_7b|huggingface_models/DeepSeek-R1-Distill-Qwen-7B|1|128"
+  "qwen2p5_7b|huggingface_models/Qwen2.5-7B-Instruct|1|128"
+)
+
+# -------------------------
+# Datasets to run (must be supported by esm/data/loaders.py and available locally)
+# Format:
+#   <dataset>|<prompt_template>|<train_split>|<eval_split>|<max_train>|<max_eval>|<T_max/max_new_token>|<max_model_len>
+#
+# Notes:
+# - T_max is a shorthand in this script for generation budget: decode.max_new_tokens (and offline_mine.max_new_tokens).
+# - max_model_len is the vLLM context window cap: prompt tokens + generated tokens (affects KV cache/memory).
+# - For long math reasoning datasets (e.g., aime/amc/aime25), set both to "__KEEP__" to follow configs/default.
+#
+# Use "__KEEP__" to keep the base-config value for that field.
+# -------------------------
+DATASET_SPECS=(
+  "math500|math_0shot|test|test|100|400|16384|16384"
+  "aime_2024|math_0shot|train|train|10|20|16384|16384"
+  "amc23|math_0shot|test|test|10|30|16384|16384"
+  "aime25|math_0shot|test|test|10|20|16384|16384"
+  "arc-c|arc_0shot|train|validation|100|null|1024|4096" # 1.12k 299
+  "openbookqa|arc_0shot|train|validation|100|null|1024|4096" # 4k 500 
+  # "gsm8k|gsm8k_0shot|train|test|100|null|2048|4096"
+  # "commonsense_qa|arc_0shot|train|validation|100|null|1024|4096" # 9k 1k
+)
+# DATASET_SPECS=(
+#   "math500|math_0shot|test|test|10|10|16384|16384"
+#   "aime_2024|math_0shot|train|train|10|10|16384|16384"
+#   "amc23|math_0shot|test|test|10|10|16384|16384"
+#   "aime25|math_0shot|test|test|10|10|16384|16384"
+#   "gsm8k|gsm8k_0shot|train|test|10|10|2048|4096"
+#   "arc-c|arc_0shot|train|validation|10|10|1024|4096" # 1.12k 299
+#   "openbookqa|arc_0shot|train|validation|10|10|1024|4096" # 4k 500 
+#   "commonsense_qa|arc_0shot|train|validation|10|10|1024|4096" # 9k 1k
+# )
+
+# -------------------------
+# Param selection (from analysis/chosen_params_for_main.csv)
+# -------------------------
+# Use the pre-selected params from analysis/chosen_params_for_main.csv.
+# Set USE_CHOSEN_PARAMS=0 to disable.
+USE_CHOSEN_PARAMS="${USE_CHOSEN_PARAMS:-1}"
+CHOSEN_PARAMS_CSV="${CHOSEN_PARAMS_CSV:-analysis/chosen_params_for_main.csv}"
+CHOSEN_PARAMS_TIER="${CHOSEN_PARAMS_TIER:-high}"
+
+# -------------------------
+# Runtime controls
+# -------------------------
+
+# Stages to run (comma-separated). Default: full pipeline.
+# Examples:
+#   STAGES="eval"                              # eval-only
+#   STAGES="mine,select,memory,eval"           # full pipeline
+STAGES="${STAGES:-mine,select,memory,eval}"
+
+# Which methods to run in eval.
+# - RUN_GREEDY=0 can save time during ESM-heavy experiments.
+# - RUN_ESM=0 makes it greedy-only (then STAGES="eval" is usually enough).
+RUN_GREEDY="${RUN_GREEDY:-1}"
+RUN_ESM="${RUN_ESM:-1}"
+
+# Base config template. Per-job configs are generated from this file.
+BASE_CFG="${BASE_CFG:-configs/default}"
+
+# Outputs: each job uses run_name = <RUN_NAME_PREFIX>_<model_key>_<dataset_key>
+RUN_NAME_PREFIX="${RUN_NAME_PREFIX:-main}"
+
+# Shared run_id for this batch (helps grouping).
+EXP_ID="${EXP_ID:-$(date +%Y%m%d_%H%M%S)}"
+
+# If DRY_RUN=1, only generate configs and print the plan.
+DRY_RUN="${DRY_RUN:-0}"
+
+# Resume / listing controls.
+# - RESUME_FROM: 0-based job index to start from (skips jobs < RESUME_FROM).
+# - LIST_JOBS=1: print idx -> (model,dataset,run_name,run_id) and exit.
+#
+# Ordering is the nested-loop order in this script:
+#   model -> dataset
+# Index formula (0-based):
+#   idx = m*n_datasets + d
+# where (m,d) are 0-based indices into MODEL_SPECS and DATASET_SPECS.
+RESUME_FROM="${RESUME_FROM:-${RESUME:-0}}"
+LIST_JOBS="${LIST_JOBS:-0}"
+
+# Use current python by default (assumes you're already in the easysteer env).
+# If you prefer forcing conda-run, set USE_CONDA_RUN=1.
+USE_CONDA_RUN="${USE_CONDA_RUN:-0}"
+CONDA_ENV="${CONDA_ENV:-easysteer}"
+
+# Global optional overrides (leave empty to keep per-dataset / base config values).
+MAX_TRAIN_EXAMPLES="${MAX_TRAIN_EXAMPLES:-}"
+MAX_EVAL_EXAMPLES="${MAX_EVAL_EXAMPLES:-}"
+
+# =========================
+
+export TOKENIZERS_PARALLELISM=false
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+PY=(python)
+if [[ "${USE_CONDA_RUN}" == "1" ]]; then
+  PY=(conda run -n "${CONDA_ENV}" python)
+fi
+
+if [[ "${CHOSEN_PARAMS_CSV}" != /* ]]; then
+  CHOSEN_PARAMS_CSV="${REPO_ROOT}/${CHOSEN_PARAMS_CSV}"
+fi
+
+if [[ ! -f "${BASE_CFG}" ]]; then
+  # Allow BASE_CFG=configs/default (no extension).
+  if [[ -f "${BASE_CFG}.yaml" ]]; then
+    BASE_CFG="${BASE_CFG}.yaml"
+  elif [[ -f "${BASE_CFG}.yml" ]]; then
+    BASE_CFG="${BASE_CFG}.yml"
+  fi
+fi
+
+if [[ ! -f "${BASE_CFG}" ]]; then
+  echo "[error] BASE_CFG not found: ${BASE_CFG}" >&2
+  exit 2
+fi
+
+IFS=',' read -r -a GPU_LIST <<< "${GPUS}"
+if [[ "${#GPU_LIST[@]}" -le 0 ]]; then
+  echo "[error] Empty GPUS list: ${GPUS}" >&2
+  exit 2
+fi
+
+IFS=',' read -r -a STAGE_LIST <<< "${STAGES}"
+if [[ "${#STAGE_LIST[@]}" -le 0 ]]; then
+  echo "[error] Empty STAGES: ${STAGES}" >&2
+  exit 2
+fi
+
+n_models="${#MODEL_SPECS[@]}"
+n_datasets="${#DATASET_SPECS[@]}"
+total_jobs=$(( n_models * n_datasets ))
+if [[ ! "${RESUME_FROM}" =~ ^[0-9]+$ ]]; then
+  echo "[error] RESUME_FROM must be a non-negative integer, got: ${RESUME_FROM}" >&2
+  exit 2
+fi
+
+OUT_CFG_DIR="${OUT_CFG_DIR:-configs/_main_generated/${EXP_ID}}"
+LOG_DIR="${LOG_DIR:-}"
+
+declare -A PARAM_LAYER_MAP
+declare -A PARAM_KSCALE_MAP
+__param_rows=()
+missing_param_warned=0
+
+if [[ "${USE_CHOSEN_PARAMS}" != "0" ]]; then
+  if [[ ! -f "${CHOSEN_PARAMS_CSV}" ]]; then
+    echo "[error] CHOSEN_PARAMS_CSV not found: ${CHOSEN_PARAMS_CSV}" >&2
+    exit 2
+  fi
+
+  # Load tier=CHOSEN_PARAMS_TIER rows into bash maps keyed by "<model_basename>|<dataset>".
+  mapfile -t __param_rows < <(CHOSEN_PARAMS_CSV="${CHOSEN_PARAMS_CSV}" CHOSEN_PARAMS_TIER="${CHOSEN_PARAMS_TIER}" "${PY[@]}" - <<'PY'
+import os
+from pathlib import Path
+
+import pandas as pd
+
+csv_path = Path(os.environ["CHOSEN_PARAMS_CSV"])
+tier = str(os.environ.get("CHOSEN_PARAMS_TIER", "high")).strip()
+df = pd.read_csv(csv_path)
+df = df[df["tier"] == tier]
+if df.empty:
+    raise SystemExit(f"No rows found in {csv_path} for tier={tier}")
+
+for _, row in df.iterrows():
+    model = str(row["models"]).strip().replace("\\", "/").split("/")[-1]
+    dataset = str(row["dataset"]).strip()
+    offline = str(row["offline_candidate_layers"]).strip()
+    kscale = str(row["online_k_scale"]).strip()
+    print(f"{model}|{dataset}|{offline}|{kscale}")
+PY
+  )
+
+  for line in "${__param_rows[@]}"; do
+    IFS='|' read -r m d l k <<< "${line}"
+    key="${m}|${d}"
+    PARAM_LAYER_MAP["${key}"]="${l}"
+    PARAM_KSCALE_MAP["${key}"]="${k}"
+  done
+fi
+
+OUTPUTS_ROOT="$(
+  BASE_CFG="${BASE_CFG}" "${PY[@]}" - <<'PY'
+import os
+from pathlib import Path
+
+import yaml
+
+base_cfg = Path(os.environ["BASE_CFG"])
+raw = yaml.safe_load(base_cfg.read_text(encoding="utf-8")) or {}
+root = (raw.get("outputs") or {}).get("root_dir") or "outputs"
+print(Path(root).expanduser())
+PY
+)"
+if [[ -z "${OUTPUTS_ROOT}" ]]; then
+  OUTPUTS_ROOT="outputs"
+fi
+if [[ "${OUTPUTS_ROOT}" != /* ]]; then
+  OUTPUTS_ROOT="${REPO_ROOT}/${OUTPUTS_ROOT}"
+fi
+
+mkdir -p "${OUT_CFG_DIR}"
+if [[ -n "${LOG_DIR}" ]]; then
+  mkdir -p "${LOG_DIR}"
+fi
+
+sanitize() {
+  local s="$1"
+  s="$(echo "${s}" | tr '[:upper:]' '[:lower:]')"
+  s="${s//[^a-z0-9]/_}"
+  s="${s//__/_}"
+  s="${s#_}"
+  s="${s%_}"
+  echo "${s}"
+}
+
+write_cfg() {
+  local out_cfg="$1"
+  local run_name="$2"
+  local model_path="$3"
+  local tp="$4"
+  local max_num_seqs="$5"
+  local dataset="$6"
+  local prompt_template="$7"
+  local train_split="$8"
+  local eval_split="$9"
+  local max_train="${10}"
+  local max_eval="${11}"
+  local tmax="${12}"
+  local max_model_len="${13}"
+  local offline_layer="${14:-}"
+  local online_k_scale="${15:-}"
+
+  env BASE_CFG="${BASE_CFG}" OUT_CFG="${out_cfg}" RUN_NAME="${run_name}" \
+    MODEL_PATH="${model_path}" MODEL_TP="${tp}" \
+    MAX_NUM_SEQS="${max_num_seqs}" \
+    DATASET="${dataset}" PROMPT_TEMPLATE="${prompt_template}" TRAIN_SPLIT="${train_split}" EVAL_SPLIT="${eval_split}" \
+    MAX_TRAIN="${max_train}" MAX_EVAL="${max_eval}" TMAX="${tmax}" MAX_MODEL_LEN="${max_model_len}" \
+    RUN_GREEDY="${RUN_GREEDY}" RUN_ESM="${RUN_ESM}" \
+    OFFLINE_LAYER="${offline_layer}" ONLINE_K_SCALE="${online_k_scale}" \
+    GLOBAL_MAX_TRAIN="${MAX_TRAIN_EXAMPLES}" GLOBAL_MAX_EVAL="${MAX_EVAL_EXAMPLES}" \
+    "${PY[@]}" - <<'PY'
+import os
+from pathlib import Path
+
+import yaml
+
+base_cfg = Path(os.environ["BASE_CFG"])
+out_cfg = Path(os.environ["OUT_CFG"])
+
+with base_cfg.open("r", encoding="utf-8") as f:
+    raw = yaml.safe_load(f) or {}
+if not isinstance(raw, dict):
+    raise TypeError(f"Config root must be a dict, got {type(raw)}")
+
+raw.setdefault("outputs", {})
+raw["outputs"]["run_name"] = os.environ["RUN_NAME"]
+
+raw.setdefault("model", {})
+raw["model"]["name_or_path"] = os.environ["MODEL_PATH"]
+tp_s = str(os.environ.get("MODEL_TP", "__KEEP__")).strip()
+if tp_s and tp_s != "__KEEP__":
+    raw["model"]["tensor_parallel_size"] = int(tp_s)
+
+raw.setdefault("task", {})
+raw["task"]["dataset"] = os.environ["DATASET"]
+raw["task"]["train_split"] = os.environ["TRAIN_SPLIT"]
+raw["task"]["eval_split"] = os.environ["EVAL_SPLIT"]
+
+def _maybe_int(s: str):
+    s = (s or "").strip()
+    if s == "" or s == "__KEEP__":
+        return "__KEEP__"
+    if s.lower() in {"none", "null"}:
+        return None
+    return int(s)
+
+# Global override (env) > per-dataset > base config
+g_train = _maybe_int(os.environ.get("GLOBAL_MAX_TRAIN", ""))
+g_eval = _maybe_int(os.environ.get("GLOBAL_MAX_EVAL", ""))
+ds_train = _maybe_int(os.environ.get("MAX_TRAIN", "__KEEP__"))
+ds_eval = _maybe_int(os.environ.get("MAX_EVAL", "__KEEP__"))
+
+if g_train != "__KEEP__":
+    raw["task"]["max_train_examples"] = g_train
+elif ds_train != "__KEEP__":
+    raw["task"]["max_train_examples"] = ds_train
+
+if g_eval != "__KEEP__":
+    raw["task"]["max_eval_examples"] = g_eval
+elif ds_eval != "__KEEP__":
+    raw["task"]["max_eval_examples"] = ds_eval
+
+raw.setdefault("prompt", {})
+raw["prompt"]["template"] = os.environ["PROMPT_TEMPLATE"]
+
+raw.setdefault("decode", {})
+tmax = _maybe_int(os.environ.get("TMAX", "__KEEP__"))
+if tmax != "__KEEP__":
+    raw["decode"]["max_new_tokens"] = int(tmax) if tmax is not None else None
+    # By default, align mining rollout budget with eval budget for better segment/CP coverage.
+    raw.setdefault("offline_mine", {})
+    raw["offline_mine"]["max_new_tokens"] = int(tmax) if tmax is not None else None
+
+max_model_len = _maybe_int(os.environ.get("MAX_MODEL_LEN", "__KEEP__"))
+if max_model_len != "__KEEP__":
+    raw.setdefault("model", {})
+    raw["model"]["max_model_len"] = int(max_model_len) if max_model_len is not None else None
+
+max_num_seqs = _maybe_int(os.environ.get("MAX_NUM_SEQS", "__KEEP__"))
+if max_num_seqs != "__KEEP__":
+    if max_num_seqs is None:
+        raise ValueError("MAX_NUM_SEQS cannot be null/none")
+    raw.setdefault("model", {})
+    raw["model"]["max_num_seqs"] = int(max_num_seqs)
+
+# Offline/online params from chosen_params_for_main.csv (tier=high).
+off_layer = str(os.environ.get("OFFLINE_LAYER", "")).strip()
+if off_layer != "":
+    raw.setdefault("offline_mine", {})
+    raw["offline_mine"]["candidate_layers"] = [off_layer]
+
+online_k = str(os.environ.get("ONLINE_K_SCALE", "")).strip()
+if online_k != "":
+    raw.setdefault("online", {})
+    raw["online"]["k_scale"] = float(online_k)
+
+# Eval methods toggle.
+methods = []
+if str(os.environ.get("RUN_GREEDY", "1")).strip() not in {"0", "false", "False"}:
+    methods.append("greedy")
+if str(os.environ.get("RUN_ESM", "1")).strip() not in {"0", "false", "False"}:
+    methods.append("esm")
+if not methods:
+    raise ValueError("Both RUN_GREEDY and RUN_ESM are disabled; nothing to run.")
+
+raw.setdefault("eval", {})
+raw["eval"]["methods"] = methods
+raw["eval"]["ablations"] = []
+
+out_cfg.parent.mkdir(parents=True, exist_ok=True)
+with out_cfg.open("w", encoding="utf-8") as f:
+    yaml.safe_dump(raw, f, allow_unicode=True, sort_keys=False)
+PY
+}
+
+jobs=()  # "IDX|RUN_NAME|CFG_PATH|CMD"
+job_idx=0
+if [[ "${LIST_JOBS}" == "1" ]]; then
+  echo "[list_jobs] 1"
+  echo "[ordering] model -> dataset"
+  echo "[note] set EXP_ID to match previous run_id if needed"
+  echo
+fi
+for mspec in "${MODEL_SPECS[@]}"; do
+  IFS='|' read -r model_key model_path model_tp model_max_num_seqs <<< "${mspec}"
+  model_key="$(sanitize "${model_key}")"
+  model_max_num_seqs="${model_max_num_seqs:-__KEEP__}"
+
+  for dspec in "${DATASET_SPECS[@]}"; do
+    IFS='|' read -r dataset prompt_template train_split eval_split max_train max_eval tmax max_model_len <<< "${dspec}"
+    dataset_key="$(sanitize "${dataset}")"
+    run_name="$(sanitize "${RUN_NAME_PREFIX}")_${model_key}_${dataset_key}"
+    cfg_path="${OUT_CFG_DIR}/${run_name}.yaml"
+
+    offline_layer=""
+    online_k_scale=""
+    if [[ "${USE_CHOSEN_PARAMS}" != "0" ]]; then
+      param_key="$(basename "${model_path}")|${dataset}"
+      offline_layer="${PARAM_LAYER_MAP["${param_key}"]:-}"
+      online_k_scale="${PARAM_KSCALE_MAP["${param_key}"]:-}"
+      if [[ "${LIST_JOBS}" != "1" && ( -z "${offline_layer}" || -z "${online_k_scale}" ) && "${missing_param_warned}" == "0" ]]; then
+        echo "[warn] missing chosen params for some jobs (fallback to base config values)" >&2
+        missing_param_warned=1
+      fi
+    fi
+
+    if [[ "${LIST_JOBS}" == "1" ]]; then
+      printf "%5d | model=%s | dataset=%s | run_name=%s | run_id=%s\n" \
+        "${job_idx}" "${model_key}" "${dataset_key}" "${run_name}" "${EXP_ID}"
+      job_idx=$((job_idx + 1))
+      continue
+    fi
+
+    if (( job_idx < RESUME_FROM )); then
+      job_idx=$((job_idx + 1))
+      continue
+    fi
+
+    write_cfg \
+      "${cfg_path}" "${run_name}" "${model_path}" "${model_tp}" "${model_max_num_seqs}" \
+      "${dataset}" "${prompt_template}" "${train_split}" "${eval_split}" \
+      "${max_train}" "${max_eval}" "${tmax}" "${max_model_len}" \
+      "${offline_layer}" "${online_k_scale}"
+
+    cmd="cd \"${REPO_ROOT}\""
+    for st in "${STAGE_LIST[@]}"; do
+      st="$(echo "${st}" | xargs)"
+      if [[ -z "${st}" ]]; then
+        continue
+      fi
+      cmd+=" && ${PY[*]} run.py --config \"${cfg_path}\" --run-id \"${EXP_ID}\" ${st}"
+    done
+
+    jobs+=( "${job_idx}|${run_name}|${cfg_path}|${cmd}" )
+    job_idx=$((job_idx + 1))
+  done
+done
+
+if [[ "${LIST_JOBS}" == "1" ]]; then
+  echo
+  echo "[n_jobs_total] ${total_jobs}"
+  exit 0
+fi
+
+echo "[mode] main experiments"
+echo "[base_cfg] ${BASE_CFG}"
+echo "[run_name_prefix] ${RUN_NAME_PREFIX}"
+echo "[exp_id] ${EXP_ID}"
+echo "[stages] ${STAGES}"
+echo "[methods] RUN_GREEDY=${RUN_GREEDY} RUN_ESM=${RUN_ESM}"
+if [[ "${USE_CHOSEN_PARAMS}" != "0" ]]; then
+  echo "[chosen_params] ${CHOSEN_PARAMS_CSV} (tier=${CHOSEN_PARAMS_TIER})"
+else
+  echo "[chosen_params] disabled (using base config values)"
+fi
+echo "[resume_from] ${RESUME_FROM} (0-based index)"
+echo "[gpus] ${GPUS}"
+echo "[n_models] ${n_models}"
+echo "[n_datasets] ${n_datasets}"
+echo "[n_jobs_total] ${total_jobs}"
+echo "[n_jobs] ${#jobs[@]}"
+echo "[out_cfg_dir] ${OUT_CFG_DIR}"
+echo "[outputs_root] ${OUTPUTS_ROOT}"
+if [[ -n "${LOG_DIR}" ]]; then
+  echo "[log_dir] ${LOG_DIR}"
+else
+  echo "[log_dir] per-run (outputs/<run_name>/<run_id>/logs/stdout.log)"
+fi
+echo
+
+if (( ${#jobs[@]} == 0 )); then
+  echo "[no jobs] RESUME_FROM=${RESUME_FROM} (n_jobs_total=${total_jobs})"
+  exit 0
+fi
+
+if [[ "${DRY_RUN}" == "1" ]]; then
+  echo "[dry_run] 1 (configs generated; jobs not started)"
+  exit 0
+fi
+
+available_gpus=( "${GPU_LIST[@]}" )
+declare -A pid_to_gpu=()
+declare -A pid_to_name=()
+failed=0
+failed_jobs=()
+
+# Completion event queue (bash 4.x compatible replacement for `wait -n -p`).
+EVENT_TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/main_experiments.${EXP_ID}.XXXXXX")"
+EVENT_FIFO="${EVENT_TMP_DIR}/events.fifo"
+mkfifo "${EVENT_FIFO}"
+cleanup_events() {
+  rm -rf "${EVENT_TMP_DIR}"
+}
+
+terminate_requested=0
+terminate_jobs() {
+  local pids=("${!pid_to_gpu[@]}")
+  if (( ${#pids[@]} == 0 )); then
+    return
+  fi
+  echo "[signal] terminating ${#pids[@]} running job(s)..." >&2
+  for pid in "${pids[@]}"; do
+    if kill -0 "${pid}" 2>/dev/null; then
+      kill -TERM -- "-${pid}" 2>/dev/null || kill -TERM "${pid}" 2>/dev/null || true
+    fi
+  done
+  sleep 1
+  for pid in "${pids[@]}"; do
+    if kill -0 "${pid}" 2>/dev/null; then
+      kill -KILL -- "-${pid}" 2>/dev/null || kill -KILL "${pid}" 2>/dev/null || true
+    fi
+  done
+}
+on_signal() {
+  local sig="$1"
+  if [[ "${terminate_requested}" == "1" ]]; then
+    exit 1
+  fi
+  terminate_requested=1
+  echo "[signal] ${sig} received; terminating running jobs..." >&2
+  terminate_jobs
+  if [[ "${sig}" == "INT" ]]; then
+    exit 130
+  fi
+  if [[ "${sig}" == "TERM" ]]; then
+    exit 143
+  fi
+  exit 1
+}
+trap cleanup_events EXIT
+trap 'on_signal INT' INT
+trap 'on_signal TERM' TERM
+
+start_job() {
+  local gpu="$1"
+  local name="$2"
+  local cfg="$3"
+  local cmd="$4"
+  local run_name="$5"
+  local run_id="$6"
+  local log_path=""
+
+  if [[ -n "${LOG_DIR}" ]]; then
+    log_path="${LOG_DIR}/${name}.log"
+    mkdir -p "${LOG_DIR}"
+  else
+    local run_dir="${OUTPUTS_ROOT}/${run_name}/${run_id}"
+    local run_logs="${run_dir}/logs"
+    mkdir -p "${run_logs}"
+    log_path="${run_logs}/stdout.log"
+  fi
+
+  echo "[start][gpu=${gpu}] ${name}"
+  echo "  cfg: ${cfg}"
+  echo "  log: ${log_path}"
+
+  (
+    set +e
+    export CUDA_VISIBLE_DEVICES="${gpu}"
+    bash -lc "${cmd}"
+    rc=$?
+    # Use BASHPID (not $$) so the parent can match `$!`.
+    printf '%s %s\n' "${BASHPID}" "${rc}" >"${EVENT_FIFO}"
+    exit "${rc}"
+  ) >"${log_path}" 2>&1 &
+
+  local pid="$!"
+  pid_to_gpu["${pid}"]="${gpu}"
+  pid_to_name["${pid}"]="${name}"
+}
+
+queue=( "${jobs[@]}" )
+while [[ "${#queue[@]}" -gt 0 || "${#pid_to_gpu[@]}" -gt 0 ]]; do
+  while [[ "${#queue[@]}" -gt 0 && "${#available_gpus[@]}" -gt 0 ]]; do
+    job="${queue[0]}"
+    queue=( "${queue[@]:1}" )
+
+    gpu="${available_gpus[0]}"
+    available_gpus=( "${available_gpus[@]:1}" )
+
+    IFS='|' read -r idx name cfg cmd <<< "${job}"
+    safe_name="$(printf "%05d__%s" "${idx}" "${name}")"
+    start_job "${gpu}" "${safe_name}" "${cfg}" "${cmd}" "${name}" "${EXP_ID}"
+  done
+
+  if [[ "${#pid_to_gpu[@]}" -gt 0 ]]; then
+    done_pid=""
+    rc=0
+    # Block until any job finishes and reports "<pid> <rc>".
+    if IFS=' ' read -r done_pid rc <"${EVENT_FIFO}"; then
+      :
+    else
+      echo "[error] failed to read job completion event" >&2
+      exit 2
+    fi
+    # Reap to avoid zombies (ignore wait rc; we already captured rc).
+    wait "${done_pid}" >/dev/null 2>&1 || true
+
+    if [[ -n "${done_pid}" ]]; then
+      gpu="${pid_to_gpu[${done_pid}]}"
+      name="${pid_to_name[${done_pid}]}"
+      unset pid_to_gpu["${done_pid}"]
+      unset pid_to_name["${done_pid}"]
+      available_gpus+=( "${gpu}" )
+      if (( rc != 0 )); then
+        failed=$((failed + 1))
+        failed_jobs+=( "${name}|gpu=${gpu}|rc=${rc}" )
+        echo "[fail][gpu=${gpu}][rc=${rc}] ${name}" >&2
+      else
+        echo "[done][gpu=${gpu}] ${name}"
+      fi
+    fi
+  fi
+done
+
+echo
+if (( failed > 0 )); then
+  echo "[all done] exp_id=${EXP_ID} (failed=${failed}/${#jobs[@]})" >&2
+  for j in "${failed_jobs[@]}"; do
+    echo "  - ${j}" >&2
+  done
+  exit 1
+fi
+echo "[all done] exp_id=${EXP_ID}"
