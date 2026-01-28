@@ -24,11 +24,12 @@ set -m
 # =========================
 # User-editable (TOP)
 # =========================
-GPUS="${GPUS:-0,1,2,3}"
+GPUS="${GPUS:-0,1,2,3,4,5,6}"
 
 # Models: <model_key>|<name_or_path>|<tensor_parallel_size>|<max_num_seqs>
 MODEL_SPECS=(
-  "ds_r1_qwen_1p5b|huggingface_models/DeepSeek-R1-Distill-Qwen-7B|1|256"
+  # Keep model_key aligned with main experiments so eval-only ablations can reuse artifacts.
+  "ds_r1_qwen_7b|huggingface_models/DeepSeek-R1-Distill-Qwen-7B|1|128"
   # "qwen2p5_3b|huggingface_models/Qwen2.5-3B-Instruct|1|256"
 )
 
@@ -36,7 +37,7 @@ MODEL_SPECS=(
 DATASET_SPECS=(
   "math500|math_0shot|test|test|100|400|16384|16384"
   # "aime_2024|math_0shot|train|train|10|20|16384|16384"
-  "amc23|math_0shot|test|test|10|30|16384|16384"
+  # "amc23|math_0shot|test|test|10|30|16384|16384"
   # "aime25|math_0shot|test|test|10|20|16384|16384"
   # "arc-c|arc_0shot|train|validation|100|null|1024|4096" # 1.12k 299
   # "openbookqa|arc_0shot|train|validation|100|null|1024|4096" # 4k 500 
@@ -45,13 +46,15 @@ DATASET_SPECS=(
 )
 
 # Ablations to run (comma-separated from the list above).
-ABLATIONS="${ABLATIONS:-random_mining,top1_memory,use_random_memory,random_use_memory,no_probing,first_step_only}"
+# ABLATIONS="${ABLATIONS:-random_mining,top1_memory,use_random_memory,random_use_memory,no_probing,first_step_only}"
+ABLATIONS="${ABLATIONS:-top1_memory}"
 
 # Base config template.
 BASE_CFG="${BASE_CFG:-configs/default}"
 
 # Run naming.
 RUN_NAME_PREFIX="${RUN_NAME_PREFIX:-ablation}"
+BASE_RUN_NAME_PREFIX="${BASE_RUN_NAME_PREFIX:-main}"  # where to pull artifacts when skipping offline stages
 EXP_ID="${EXP_ID:-$(date +%Y%m%d_%H%M%S)}"   # shared run_id
 
 # Stage override (applies to all ablations if set).
@@ -59,7 +62,7 @@ EXP_ID="${EXP_ID:-$(date +%Y%m%d_%H%M%S)}"   # shared run_id
 STAGES="${STAGES:-}"
 
 # Eval methods toggle.
-RUN_GREEDY="${RUN_GREEDY:-1}"
+RUN_GREEDY="${RUN_GREEDY:-0}"
 RUN_ESM="${RUN_ESM:-1}"
 
 # Use chosen params csv (tier=high by default).
@@ -202,24 +205,26 @@ write_cfg() {
   local out_cfg="$1"
   local run_name="$2"
   local run_name_base="$3"
-  local model_path="$4"
-  local tp="$5"
-  local max_num_seqs="$6"
-  local dataset="$7"
-  local prompt_template="$8"
-  local train_split="$9"
-  local eval_split="${10}"
-  local max_train="${11}"
-  local max_eval="${12}"
-  local tmax="${13}"
-  local max_model_len="${14}"
-  local offline_layer="${15:-}"
-  local online_k_scale="${16:-}"
-  local ablation="${17}"
-  local stage_plan="${18}"
-  local base_run_id="${19}"
+  local artifact_run_name_base="$4"
+  local model_path="$5"
+  local tp="$6"
+  local max_num_seqs="$7"
+  local dataset="$8"
+  local prompt_template="$9"
+  local train_split="${10}"
+  local eval_split="${11}"
+  local max_train="${12}"
+  local max_eval="${13}"
+  local tmax="${14}"
+  local max_model_len="${15}"
+  local offline_layer="${16:-}"
+  local online_k_scale="${17:-}"
+  local ablation="${18}"
+  local stage_plan="${19}"
+  local base_run_id="${20}"
 
   env BASE_CFG="${BASE_CFG}" OUT_CFG="${out_cfg}" RUN_NAME="${run_name}" RUN_NAME_BASE="${run_name_base}" \
+    ARTIFACT_RUN_NAME_BASE="${artifact_run_name_base}" \
     MODEL_PATH="${model_path}" MODEL_TP="${tp}" MAX_NUM_SEQS="${max_num_seqs}" \
     DATASET="${dataset}" PROMPT_TEMPLATE="${prompt_template}" TRAIN_SPLIT="${train_split}" EVAL_SPLIT="${eval_split}" \
     MAX_TRAIN="${max_train}" MAX_EVAL="${max_eval}" TMAX="${tmax}" MAX_MODEL_LEN="${max_model_len}" \
@@ -343,7 +348,7 @@ if stages_set.isdisjoint({"mine", "select", "memory"}):
     raw.setdefault("eval", {})
     base_run_id = os.environ.get("BASE_RUN_ID", "latest")
     outputs_root = Path(os.environ.get("OUTPUTS_ROOT", "outputs"))
-    run_name_base = os.environ.get("RUN_NAME_BASE", "")
+    run_name_base = os.environ.get("ARTIFACT_RUN_NAME_BASE") or os.environ.get("RUN_NAME_BASE", "")
     raw["eval"]["artifact_run_dir"] = str(outputs_root / run_name_base / base_run_id)
 
 out_cfg.parent.mkdir(parents=True, exist_ok=True)
@@ -370,6 +375,10 @@ for mspec in "${MODEL_SPECS[@]}"; do
     IFS='|' read -r dataset prompt_template train_split eval_split max_train max_eval tmax max_model_len <<< "${dspec}"
     dataset_key="$(sanitize "${dataset}")"
     run_name_base="$(sanitize "${RUN_NAME_PREFIX}")_${model_key_s}_${dataset_key}"
+    artifact_run_name_base="$(sanitize "${BASE_RUN_NAME_PREFIX}")_${model_key_s}_${dataset_key}"
+    if [[ -z "${artifact_run_name_base}" ]]; then
+      artifact_run_name_base="${run_name_base}"
+    fi
 
     offline_layer=""
     online_k_scale=""
@@ -390,6 +399,7 @@ for mspec in "${MODEL_SPECS[@]}"; do
         continue
       fi
 
+      default_eval_only=0
       stage_plan="${STAGES}"
       if [[ -z "${stage_plan}" ]]; then
         case "${abl_s}" in
@@ -398,8 +408,46 @@ for mspec in "${MODEL_SPECS[@]}"; do
             ;;
           *)
             stage_plan="eval"
+            default_eval_only=1
             ;;
         esac
+      fi
+
+      base_run_id_resolved="${BASE_RUN_ID}"
+
+      # If this ablation defaults to eval-only, try to find an existing artifact run.
+      # Preference: BASE_RUN_ID (if not "latest") -> newest run_dir with memory/keys.npy.
+      if [[ "${default_eval_only}" == "1" ]]; then
+        artifact_root_base="${OUTPUTS_ROOT}/${artifact_run_name_base}"
+        resolved=""
+
+        if [[ -d "${artifact_root_base}" ]]; then
+          if [[ "${BASE_RUN_ID}" != "latest" ]]; then
+            expected_mem="${artifact_root_base}/${BASE_RUN_ID}/memory/keys.npy"
+            if [[ -f "${expected_mem}" ]]; then
+              resolved="${BASE_RUN_ID}"
+            fi
+          fi
+
+          if [[ -z "${resolved}" ]]; then
+            mapfile -t __artifact_dirs < <(find "${artifact_root_base}" -maxdepth 1 -mindepth 1 -type d -printf '%f\n' | sort -r)
+            for cand in "${__artifact_dirs[@]}"; do
+              [[ "${cand}" == "latest" ]] && continue
+              expected_mem="${artifact_root_base}/${cand}/memory/keys.npy"
+              if [[ -f "${expected_mem}" ]]; then
+                resolved="${cand}"
+                break
+              fi
+            done
+          fi
+        fi
+
+        if [[ -n "${resolved}" ]]; then
+          base_run_id_resolved="${resolved}"
+        else
+          echo "[info] artifact missing for eval-only ablation; switching to mine,select,memory,eval: ${artifact_root_base}/${BASE_RUN_ID}/memory/keys.npy" >&2
+          stage_plan="mine,select,memory,eval"
+        fi
       fi
 
       run_name="${run_name_base}_${abl_s}"
@@ -413,10 +461,11 @@ for mspec in "${MODEL_SPECS[@]}"; do
       fi
 
       write_cfg \
-        "${cfg_path}" "${run_name}" "${run_name_base}" "${model_path}" "${model_tp}" "${model_max_num_seqs}" \
+        "${cfg_path}" "${run_name}" "${run_name_base}" "${artifact_run_name_base}" \
+        "${model_path}" "${model_tp}" "${model_max_num_seqs}" \
         "${dataset}" "${prompt_template}" "${train_split}" "${eval_split}" \
         "${max_train}" "${max_eval}" "${tmax}" "${max_model_len}" \
-        "${offline_layer}" "${online_k_scale}" "${abl_s}" "${stage_plan}" "${BASE_RUN_ID}"
+        "${offline_layer}" "${online_k_scale}" "${abl_s}" "${stage_plan}" "${base_run_id_resolved}"
 
       cmd="cd \"${REPO_ROOT}\""
       IFS=',' read -r -a STAGE_LIST <<< "${stage_plan}"
@@ -448,6 +497,8 @@ fi
 echo "[mode] ablation experiments"
 echo "[base_cfg] ${BASE_CFG}"
 echo "[run_name_prefix] ${RUN_NAME_PREFIX}"
+echo "[base_run_name_prefix] ${BASE_RUN_NAME_PREFIX}"
+echo "[base_run_id_for_eval_only] ${BASE_RUN_ID}"
 echo "[exp_id] ${EXP_ID}"
 echo "[ablations] ${ABLATIONS}"
 echo "[gpus] ${GPUS}"
@@ -517,19 +568,28 @@ launch_job() {
   local job="$1"
   local gpu="$2"
   IFS='|' read -r idx rn abl cfg cmd <<< "${job}"
-  local cmd_gpu="CUDA_VISIBLE_DEVICES=${gpu} ${cmd}"
   local log_path=""
   if [[ -n "${LOG_DIR}" ]]; then
     log_path="${LOG_DIR}/${rn}_${abl}_${EXP_ID}.log"
-    cmd_gpu+=" &>> \"${log_path}\""
+  else
+    local run_dir="${OUTPUTS_ROOT}/${rn}/${EXP_ID}"
+    local run_logs="${run_dir}/logs"
+    mkdir -p "${run_logs}"
+    log_path="${run_logs}/stdout.log"
   fi
+
   echo "[start] idx=${idx} gpu=${gpu} run=${rn}"
-  # Wrap job + reporter so the PID we track equals the PID written to FIFO.
+  echo "  cfg: ${cfg}"
+  echo "  log: ${log_path}"
+
   (
-    bash -c "${cmd_gpu}"
+    set +e
+    export CUDA_VISIBLE_DEVICES="${gpu}"
+    bash -lc "${cmd}"
     code=$?
     echo "${BASHPID}:${code}" > "${EVENT_FIFO}"
-  ) &
+    exit "${code}"
+  ) >"${log_path}" 2>&1 &
   local pid=$!
   pid_to_gpu["${pid}"]="${gpu}"
   pid_to_name["${pid}"]="${rn}"

@@ -12,7 +12,7 @@ set -m
 # User-editable (TOP)
 # =========================
 # GPUs to use (one concurrent job per GPU).
-GPUS="${GPUS:-0,1,2,3,4,5,6,7}"
+GPUS="${GPUS:-0,1,2,3,4,5,6}"
 
 # Models: <model_key>|<name_or_path>|<tensor_parallel_size>|<max_num_seqs>
 # Keep list form even if running a single model for easy edits.
@@ -79,8 +79,8 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-# PY=(/opt/conda/envs/easysteer/bin/python)
-PY=(python)
+PY=(/opt/conda/envs/easysteer/bin/python)
+# PY=(python)
 if [[ "${USE_CONDA_RUN}" == "1" ]]; then
   PY=(conda run -n "${CONDA_ENV}" python)
 fi

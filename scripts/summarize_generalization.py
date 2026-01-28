@@ -19,6 +19,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
+
 
 def _load_json(path: Path) -> dict[str, Any] | None:
     try:
@@ -124,6 +126,35 @@ def _load_main_results(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
+def _load_diagnostics(run_dir: Path) -> dict[str, dict[str, Any]]:
+    """Load tokens/overhead diagnostics per method (greedy/esm)."""
+    diag: dict[str, dict[str, Any]] = {}
+    try:
+        # Pick the first diagnostics_T*.csv if multiple exist.
+        candidates = sorted(run_dir.glob("tables/diagnostics_T*.csv"))
+        if not candidates:
+            return diag
+        df = pd.read_csv(candidates[0])
+    except Exception:
+        return diag
+
+    for _, row in df.iterrows():
+        method = str(row.get("method", "")).strip().lower()
+        if not method:
+            continue
+        diag[method] = {
+            "tokens_mean": row.get("tokens_mean"),
+            "tokens_p50": row.get("tokens_p50"),
+            "tokens_p90": row.get("tokens_p90"),
+            "tokens_max": row.get("tokens_max"),
+            "budget_mean": row.get("budget_mean"),
+            "overhead_mean": row.get("overhead_mean"),
+            "overhead_p90": row.get("overhead_p90"),
+            "overhead_max": row.get("overhead_max"),
+        }
+    return diag
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Summarize cross-dataset generalization runs.")
     parser.add_argument("--outputs-root", type=Path, default=Path("outputs"), help="Outputs root directory.")
@@ -193,6 +224,17 @@ def main() -> None:
         if mem_dataset is None:
             mem_dataset = _guess_mem_dataset_from_name(run_name)
 
+        # Diagnostics (tokens/overhead per method).
+        diag = _load_diagnostics(run_dir)
+        # Probe tokens from config (same for all rows in this run).
+        probe_tokens = None
+        online_cfg = cfg.get("online") or {}
+        if "probe_tokens" in online_cfg:
+            try:
+                probe_tokens = int(online_cfg.get("probe_tokens"))
+            except Exception:
+                probe_tokens = online_cfg.get("probe_tokens")
+
         model_name = Path((cfg.get("model") or {}).get("name_or_path", "")).name
         prompt_template = (cfg.get("prompt") or {}).get("template")
         offline_layers = (cfg.get("offline_mine") or {}).get("candidate_layers") or []
@@ -201,6 +243,15 @@ def main() -> None:
 
         main_results = _load_main_results(run_dir / "tables" / "main_results_single.csv")
         for res in main_results:
+            # Map main_results method headers to diagnostics' method keys.
+            method_key = str(res.get("method", "")).strip().lower()
+            diag_key = {
+                "greedy-cot": "greedy",
+                "greedy": "greedy",
+                "esm": "esm",
+            }.get(method_key, method_key)
+            diag_row = diag.get(diag_key, {})
+
             rows.append(
                 {
                     "run_name": run_name,
@@ -214,6 +265,15 @@ def main() -> None:
                     "T_max": res.get("T_max"),
                     "method": res.get("method"),
                     "acc": res.get("acc"),
+                    "tokens_mean": diag_row.get("tokens_mean"),
+                    "tokens_p50": diag_row.get("tokens_p50"),
+                    "tokens_p90": diag_row.get("tokens_p90"),
+                    "tokens_max": diag_row.get("tokens_max"),
+                    "budget_mean": diag_row.get("budget_mean"),
+                    "overhead_mean": diag_row.get("overhead_mean"),
+                    "overhead_p90": diag_row.get("overhead_p90"),
+                    "overhead_max": diag_row.get("overhead_max"),
+                    "probe_tokens": probe_tokens,
                     "online_k_scale": online_k_scale,
                     "offline_candidate_layers": offline_layer,
                     "artifact_run_dir": str(artifact_root) if artifact_root else None,
@@ -243,6 +303,15 @@ def main() -> None:
         "T_max",
         "method",
         "acc",
+        "tokens_mean",
+        "tokens_p50",
+        "tokens_p90",
+        "tokens_max",
+        "budget_mean",
+        "overhead_mean",
+        "overhead_p90",
+        "overhead_max",
+        "probe_tokens",
         "online_k_scale",
         "offline_candidate_layers",
         "artifact_run_dir",

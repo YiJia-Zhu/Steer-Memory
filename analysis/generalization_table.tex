@@ -1,0 +1,45 @@
+\begin{table*}[t]
+\centering
+\footnotesize
+\setlength{\tabcolsep}{6pt}
+\renewcommand{\arraystretch}{1.05}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lccccccc}
+\toprule
+\textbf{Memory Dataset} & \textbf{AIME 24} & \textbf{AIME 25} & \textbf{AMC 23} & \textbf{ARC-C} & \textbf{MATH500} & \textbf{OBQA} & \textbf{Colorbar} \\
+\midrule
+AIME 24 & \cellcolor[HTML]{FEFED4}{65.0\%} & \cellcolor[HTML]{E98277}{45.0\%} & \cellcolor[HTML]{FDD5A1}{86.7\%} & \cellcolor[HTML]{FDD5A1}{76.3\%} & \cellcolor[HTML]{FEECB6}{84.2\%} & \cellcolor[HTML]{FEF2C0}{74.4\%} & \multirow{6}{*}{\begin{tabular}{c}\colorbox[HTML]{C45971}{\rule{10mm}{2.2mm}} \\ \colorbox[HTML]{D56972}{\rule{10mm}{2.2mm}} \\ \colorbox[HTML]{E57972}{\rule{10mm}{2.2mm}} \\ \colorbox[HTML]{EF8E7C}{\rule{10mm}{2.2mm}} \\ \colorbox[HTML]{F8A386}{\rule{10mm}{2.2mm}} \\ \colorbox[HTML]{FBBA91}{\rule{10mm}{2.2mm}} \\ \colorbox[HTML]{FDCE9C}{\rule{10mm}{2.2mm}} \\ \colorbox[HTML]{FEE0AB}{\rule{10mm}{2.2mm}} \\ \colorbox[HTML]{FEEEBA}{\rule{10mm}{2.2mm}} \\ \colorbox[HTML]{FEF9CC}{\rule{10mm}{2.2mm}} \\ \colorbox[HTML]{F8FCCC}{\rule{10mm}{2.2mm}} \\ \colorbox[HTML]{EBF6BA}{\rule{10mm}{2.2mm}} \\ \colorbox[HTML]{DBF0AC}{\rule{10mm}{2.2mm}} \\ \colorbox[HTML]{C9E8A1}{\rule{10mm}{2.2mm}} \\ \colorbox[HTML]{B5DF9C}{\rule{10mm}{2.2mm}} \\ \colorbox[HTML]{9ED599}{\rule{10mm}{2.2mm}} \\ \colorbox[HTML]{86C994}{\rule{10mm}{2.2mm}} \\ \colorbox[HTML]{6BBC8D}{\rule{10mm}{2.2mm}} \\ \colorbox[HTML]{61AC85}{\rule{10mm}{2.2mm}} \\ \colorbox[HTML]{599C7D}{\rule{10mm}{2.2mm}}\end{tabular}} \\
+AIME 25 & \cellcolor[HTML]{E98176}{50.0\%} & \cellcolor[HTML]{FEFED4}{60.0\%} & \cellcolor[HTML]{FDD5A1}{86.7\%} & \cellcolor[HTML]{FEDAA5}{76.9\%} & \cellcolor[HTML]{FEF9CC}{87.0\%} & \cellcolor[HTML]{FEEEBA}{73.6\%} &   \\
+AMC 23 & \cellcolor[HTML]{FEE1AC}{60.0\%} & \cellcolor[HTML]{FAB58E}{50.0\%} & \cellcolor[HTML]{FEFED4}{93.3\%} & \cellcolor[HTML]{FEEAB3}{78.9\%} & \cellcolor[HTML]{FEE4AE}{83.2\%} & \cellcolor[HTML]{FEFACE}{76.0\%} &   \\
+ARC-C & \cellcolor[HTML]{E98176}{50.0\%} & \cellcolor[HTML]{C45971}{40.0\%} & \cellcolor[HTML]{FDD5A1}{86.7\%} & \cellcolor[HTML]{FEFED4}{82.9\%} & \cellcolor[HTML]{FEF1BF}{85.5\%} & \cellcolor[HTML]{FEF1BF}{74.2\%} &   \\
+MATH500 & \cellcolor[HTML]{C45971}{45.0\%} & \cellcolor[HTML]{FEE3AD}{55.0\%} & \cellcolor[HTML]{DF7272}{76.7\%} & \cellcolor[HTML]{FEEAB3}{78.9\%} & \cellcolor[HTML]{FEFED4}{88.0\%} & \cellcolor[HTML]{FEF5C4}{74.8\%} &   \\
+OBQA & \cellcolor[HTML]{FEFED4}{65.0\%} & \cellcolor[HTML]{FAB58E}{50.0\%} & \cellcolor[HTML]{FDD5A1}{86.7\%} & \cellcolor[HTML]{FEE1AC}{77.9\%} & \cellcolor[HTML]{FEF1BF}{85.5\%} & \cellcolor[HTML]{FEFED4}{76.8\%} &   \\
+\bottomrule
+\end{tabular}%
+}
+\caption{Cross-dataset accuracy. Cell color reflects accuracy change relative to the target dataset's diagonal (neutral = in-domain).}
+\label{tab:generalization-acc}
+\end{table*}
+
+\begin{table*}[t]
+\centering
+\footnotesize
+\setlength{\tabcolsep}{6pt}
+\renewcommand{\arraystretch}{1.05}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lccccccc}
+\toprule
+\textbf{Memory Dataset} & \textbf{AIME 24} & \textbf{AIME 25} & \textbf{AMC 23} & \textbf{ARC-C} & \textbf{MATH500} & \textbf{OBQA} & \textbf{Colorbar} \\
+\midrule
+AIME 24 & \cellcolor[HTML]{FEFED4}{8,941} & \cellcolor[HTML]{FDD7A3}{10,361} & \cellcolor[HTML]{FBB78F}{5,092} & \cellcolor[HTML]{FEFED4}{600} & \cellcolor[HTML]{FEF5C6}{2,841} & \cellcolor[HTML]{FEFED4}{594} & \multirow{6}{*}{\begin{tabular}{c}\colorbox[HTML]{599C7D}{\rule{10mm}{2.2mm}} \\ \colorbox[HTML]{61AC85}{\rule{10mm}{2.2mm}} \\ \colorbox[HTML]{6BBC8D}{\rule{10mm}{2.2mm}} \\ \colorbox[HTML]{86C994}{\rule{10mm}{2.2mm}} \\ \colorbox[HTML]{9ED599}{\rule{10mm}{2.2mm}} \\ \colorbox[HTML]{B5DF9C}{\rule{10mm}{2.2mm}} \\ \colorbox[HTML]{C9E8A1}{\rule{10mm}{2.2mm}} \\ \colorbox[HTML]{DBF0AC}{\rule{10mm}{2.2mm}} \\ \colorbox[HTML]{EBF6BA}{\rule{10mm}{2.2mm}} \\ \colorbox[HTML]{F8FCCC}{\rule{10mm}{2.2mm}} \\ \colorbox[HTML]{FEF9CC}{\rule{10mm}{2.2mm}} \\ \colorbox[HTML]{FEEEBA}{\rule{10mm}{2.2mm}} \\ \colorbox[HTML]{FEE0AB}{\rule{10mm}{2.2mm}} \\ \colorbox[HTML]{FDCE9C}{\rule{10mm}{2.2mm}} \\ \colorbox[HTML]{FBBA91}{\rule{10mm}{2.2mm}} \\ \colorbox[HTML]{F8A386}{\rule{10mm}{2.2mm}} \\ \colorbox[HTML]{EF8E7C}{\rule{10mm}{2.2mm}} \\ \colorbox[HTML]{E57972}{\rule{10mm}{2.2mm}} \\ \colorbox[HTML]{D56972}{\rule{10mm}{2.2mm}} \\ \colorbox[HTML]{C45971}{\rule{10mm}{2.2mm}}\end{tabular}} \\
+AIME 25 & \cellcolor[HTML]{FEDEA8}{9,550} & \cellcolor[HTML]{FEFED4}{9,654} & \cellcolor[HTML]{FAB08C}{5,145} & \cellcolor[HTML]{FEFED4}{594} & \cellcolor[HTML]{FEF5C6}{2,834} & \cellcolor[HTML]{FEFED4}{583} &   \\
+AMC 23 & \cellcolor[HTML]{FEE9B2}{9,399} & \cellcolor[HTML]{FEEEB8}{10,022} & \cellcolor[HTML]{FEFED4}{4,000} & \cellcolor[HTML]{FEFED4}{595} & \cellcolor[HTML]{FEFBCF}{2,710} & \cellcolor[HTML]{FEFED4}{601} &   \\
+ARC-C & \cellcolor[HTML]{FEE3AD}{9,492} & \cellcolor[HTML]{F0907D}{11,147} & \cellcolor[HTML]{FCC194}{4,980} & \cellcolor[HTML]{FEFED4}{600} & \cellcolor[HTML]{FEFBCF}{2,717} & \cellcolor[HTML]{FEFED4}{584} &   \\
+MATH500 & \cellcolor[HTML]{C45971}{11,290} & \cellcolor[HTML]{FEE4AE}{10,183} & \cellcolor[HTML]{C85C72}{6,164} & \cellcolor[HTML]{FEFED4}{598} & \cellcolor[HTML]{FEFED4}{2,639} & \cellcolor[HTML]{FBFDD0}{539} &   \\
+OBQA & \cellcolor[HTML]{F9FCCE}{8,846} & \cellcolor[HTML]{FEEEB8}{10,030} & \cellcolor[HTML]{F9AF8B}{5,167} & \cellcolor[HTML]{FEFED4}{599} & \cellcolor[HTML]{FEF6C7}{2,816} & \cellcolor[HTML]{FEFED4}{592} &   \\
+\bottomrule
+\end{tabular}%
+}
+\caption{Cross-dataset token cost. Cell color reflects token change relative to the target dataset's diagonal (green = fewer tokens).}
+\label{tab:generalization-tokens}
+\end{table*}

@@ -1,0 +1,50 @@
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{llccccccc}
+\toprule
+\multirow{2}{*}{\textbf{Model}} & \multirow{2}{*}{\textbf{Method}} & \multicolumn{4}{c}{\textbf{Math Reasoning}} & \multicolumn{2}{c}{\textbf{General QA}} & \textbf{Average Stats} \\
+\cmidrule(lr){3-6} \cmidrule(lr){7-8} \cmidrule(lr){9-9}
+& & \textbf{AIME 24} & \textbf{AIME 25} & \textbf{AMC 23} & \textbf{MATH500} & \textbf{ARC-C} & \textbf{OBQA} & \textbf{Acc ($\Delta$) / Cost (Drop\%)} \\
+\midrule
+
+% --- Model: DeepSeek-R1-Distill-Qwen-1.5B ---
+& Vanilla & \res{40.0}{11,282} & \res{30.0}{11,642} & \res{60.0}{7,103} & \res{72.0}{4,688} & \res{59.2}{652} & \res{50.0}{668} & \baseavg{51.9}{6,006} \\
+& Self-Consistency & \res{35.0}{32,761} & \res{35.0}{28,535} & \res{73.3}{17,529} & \res{84.0}{9,441} & \res{54.5}{2,065} & \res{53.8}{2,089} & \avgres{55.9}{\inc{4.1}}{15,403}{\overhead{x2.6}} \\
+& Self-Discover & \res{20.0}{10,837} & \res{20.0}{9,884} & \res{50.0}{7,955} & \res{74.0}{3,979} & \res{57.2}{650} & \res{47.2}{662} & \avgres{44.7}{\dec{7.1}}{5,661}{\saving{5\%}} \\
+& DEER & \res{30.0}{9,935} & \res{40.0}{9,208} & \res{66.7}{6,509} & \res{71.0}{2,364} & \res{56.9}{625} & \res{51.2}{656} & \avgres{52.6}{\inc{0.8}}{4,883}{\saving{18\%}} \\
+& SEAL & \res{30.0}{11,802} & \res{20.0}{13,262} & \res{60.0}{7,495} & \res{62.0}{5,458} & \res{49.0}{665} & \res{50.0}{640} & \avgres{45.2}{\dec{6.7}}{6,554}{\overhead{-9\%}} \\
+\rowcolor{blue!5}  & \textbf{STIR}$_{\alpha=1.0}$ & \res{25.0}{11,265} & \res{30.0}{11,031} & \res{70.0}{6,835} & \res{71.5}{3,282} & \res{49.8}{444} & \res{47.8}{446} & \avgres{49.0}{\dec{2.8}}{5,550}{\saving{7\%}} \\
+\rowcolor{blue!5} \multirow{-7}{*}{\shortstack[l]{\textbf{DeepSeek-R1}\\\textbf{Distill-Qwen}\\\textbf{1.5B}}} & \textbf{STIR}$_{\alpha=0.75}$ & \res{\textbf{35.0}}{11,930} & \res{\textbf{35.0}}{11,383} & \res{\textbf{70.0}}{6,645} & \res{\textbf{74.8}}{4,297} & \res{\textbf{56.2}}{669} & \res{\textbf{51.4}}{629} & \avgres{53.7}{\inc{1.9}}{5,926}{\saving{1\%}} \\
+\midrule
+
+% --- Model: DeepSeek-R1-Distill-Qwen-7B ---
+& Vanilla & \res{55.0}{11,240} & \res{45.0}{9,622} & \res{86.7}{5,009} & \res{85.2}{2,760} & \res{77.9}{604} & \res{75.4}{580} & \baseavg{70.9}{4,969} \\
+& Self-Consistency & \res{65.0}{27,942} & \res{45.0}{29,249} & \res{90.0}{14,587} & \res{89.8}{7,974} & \res{79.9}{1,889} & \res{77.4}{1,905} & \avgres{74.5}{\inc{3.6}}{13,924}{\overhead{x2.8}} \\
+& Self-Discover & \res{40.0}{9,548} & \res{45.0}{9,971} & \res{80.0}{3,788} & \res{84.5}{2,133} & \res{76.3}{520} & \res{73.8}{527} & \avgres{66.6}{\dec{4.3}}{4,415}{\saving{11\%}} \\
+& DEER & \res{70.0}{9,560} & \res{50.0}{9,070} & \res{83.3}{4,327} & \res{80.8}{2,069} & \res{77.3}{572} & \res{74.0}{550} & \avgres{72.6}{\inc{1.7}}{4,358}{\saving{12\%}} \\
+& SEAL & \res{70.0}{8,902} & \res{50.0}{9,417} & \res{100.0}{3,728} & \res{85.0}{3,189} & \res{77.0}{679} & \res{74.0}{643} & \avgres{76.0}{\inc{5.1}}{4,426}{\saving{10\%}} \\
+\rowcolor{blue!5}  & \textbf{STIR}$_{\alpha=1.0}$ & \res{65.0}{9,151} & \res{50.0}{9,288} & \res{90.0}{4,148} & \res{87.0}{2,732} & \res{79.9}{534} & \res{73.2}{374} & \avgres{74.2}{\inc{3.3}}{4,371}{\saving{12\%}} \\
+\rowcolor{blue!5} \multirow{-7}{*}{\shortstack[l]{\textbf{DeepSeek-R1}\\\textbf{Distill-Qwen}\\\textbf{7B}}} & \textbf{STIR}$_{\alpha=0.75}$ & \res{\textbf{65.0}}{8,941} & \res{\textbf{60.0}}{9,653} & \res{\textbf{93.3}}{4,000} & \res{\textbf{88.0}}{2,638} & \res{\textbf{82.9}}{600} & \res{\textbf{76.8}}{591} & \avgres{77.7}{\inc{6.8}}{4,404}{\saving{11\%}} \\
+\midrule
+
+% --- Model: Qwen2.5-3B-Instruct ---
+& Vanilla & \res{5.0}{2,749} & \res{5.0}{2,559} & \res{43.3}{1,416} & \res{65.8}{872} & \res{80.9}{297} & \res{75.4}{263} & \baseavg{45.9}{1,359} \\
+& Self-Consistency & \res{10.0}{2,991} & \res{0.0}{3,090} & \res{36.7}{2,796} & \res{63.2}{1,918} & \res{83.9}{906} & \res{77.6}{804} & \avgres{45.2}{\dec{0.7}}{2,084}{\overhead{-53\%}} \\
+& Self-Discover & \res{10.0}{2,497} & \res{5.0}{1,021} & \res{56.7}{1,446} & \res{62.7}{873} & \res{73.9}{323} & \res{70.0}{289} & \avgres{46.4}{\inc{0.5}}{1,075}{\saving{20\%}} \\
+& DEER & \res{10.0}{2,084} & \res{0.0}{2,186} & \res{50.0}{1,566} & \res{61.0}{1,146} & \res{75.9}{354} & \res{69.2}{329} & \avgres{44.4}{\dec{1.5}}{1,278}{\saving{6\%}} \\
+& SEAL & \res{0.0}{2,802} & \res{0.0}{2,571} & \res{50.0}{853} & \res{70.0}{1,002} & \res{85.0}{313} & \res{66.0}{276} & \avgres{45.2}{\dec{0.7}}{1,303}{\saving{4\%}} \\
+\rowcolor{blue!5}  & \textbf{STIR}$_{\alpha=1.0}$ & \res{10.0}{1,509} & \res{0.0}{981} & \res{43.3}{875} & \res{65.8}{752} & \res{75.9}{265} & \res{76.4}{256} & \avgres{45.2}{\dec{0.7}}{773}{\saving{43\%}} \\
+\rowcolor{blue!5} \multirow{-7}{*}{\shortstack[l]{\textbf{Qwen2.5}\\\textbf{3B-Instruct}}} & \textbf{STIR}$_{\alpha=0.75}$ & \res{\textbf{20.0}}{1,264} & \res{\textbf{15.0}}{1,023} & \res{\textbf{56.7}}{1,432} & \res{\textbf{67.5}}{984} & \res{\textbf{84.3}}{287} & \res{\textbf{77.2}}{259} & \avgres{53.4}{\inc{7.5}}{875}{\saving{35\%}} \\
+\midrule
+
+% --- Model: Qwen2.5-7B-Instruct ---
+& Vanilla & \res{20.0}{1,305} & \res{10.0}{1,045} & \res{53.3}{1,853} & \res{74.5}{731} & \res{88.0}{304} & \res{78.2}{279} & \baseavg{54.0}{920} \\
+& Self-Consistency & \res{20.0}{2,998} & \res{25.0}{2,983} & \res{43.3}{2,828} & \res{75.5}{1,919} & \res{88.6}{925} & \res{79.4}{844} & \avgres{55.3}{\inc{1.3}}{2,083}{\overhead{x2.3}} \\
+& Self-Discover & \res{15.0}{1,865} & \res{15.0}{878} & \res{60.0}{821} & \res{71.0}{709} & \res{79.6}{326} & \res{73.6}{280} & \avgres{52.4}{\dec{1.6}}{813}{\saving{11\%}} \\
+& DEER & \res{20.0}{1,315} & \res{15.0}{986} & \res{50.0}{935} & \res{73.0}{822} & \res{88.3}{321} & \res{77.8}{294} & \avgres{54.0}{\inc{0.0}}{779}{\saving{15\%}} \\
+& SEAL & \res{20.0}{992} & \res{10.0}{1,078} & \res{80.0}{672} & \res{80.0}{717} & \res{86.0}{320} & \res{79.0}{279} & \avgres{59.2}{\inc{5.2}}{676}{\saving{26\%}} \\
+\rowcolor{blue!5}  & \textbf{STIR}$_{\alpha=1.0}$ & \res{20.0}{965} & \res{5.0}{911} & \res{56.7}{797} & \res{70.0}{622} & \res{88.0}{299} & \res{76.8}{239} & \avgres{52.7}{\dec{1.3}}{639}{\saving{30\%}} \\
+\rowcolor{blue!5} \multirow{-7}{*}{\shortstack[l]{\textbf{Qwen2.5}\\\textbf{7B-Instruct}}} & \textbf{STIR}$_{\alpha=0.75}$ & \res{\textbf{25.0}}{1,096} & \res{\textbf{20.0}}{937} & \res{\textbf{66.7}}{888} & \res{\textbf{75.5}}{778} & \res{\textbf{89.0}}{305} & \res{\textbf{80.4}}{254} & \avgres{59.4}{\inc{5.4}}{710}{\saving{22\%}} \\
+\bottomrule
+\end{tabular}%
+}
+\end{table*}

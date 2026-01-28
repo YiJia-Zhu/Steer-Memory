@@ -6,7 +6,7 @@ set -m
 # User-editable (TOP)
 # =========================
 # GPUs to use for parallel runs. One job will reserve tensor_parallel_size GPUs.
-GPUS="${GPUS:-1}"
+GPUS="${GPUS:-4,5,6}"
 # GPUS="${GPUS:-0,1}"
 
 # -------------------------
@@ -16,8 +16,8 @@ GPUS="${GPUS:-1}"
 MODEL_SPECS=(
   # "ds_r1_qwen_1p5b|huggingface_models/DeepSeek-R1-Distill-Qwen-1.5B|1|512"
   # "qwen2p5_3b|huggingface_models/Qwen2.5-3B-Instruct|1|512"
-  "ds_r1_qwen_7b|huggingface_models/DeepSeek-R1-Distill-Qwen-7B|1|256"
-  "qwen2p5_7b|huggingface_models/Qwen2.5-7B-Instruct|1|256"
+  "ds_r1_qwen_7b|huggingface_models/DeepSeek-R1-Distill-Qwen-7B|1|128"
+  # "qwen2p5_7b|huggingface_models/Qwen2.5-7B-Instruct|1|256"
 )
 
 # -------------------------
@@ -32,11 +32,11 @@ MODEL_SPECS=(
 # -------------------------
 DATASET_SPECS=(
   "math500|math_0shot|test|test|100|400|16384|16384"
-  "aime_2024|math_0shot|train|train|10|20|16384|16384"
+  # "aime_2024|math_0shot|train|train|10|20|16384|16384"
   "amc23|math_0shot|test|test|10|30|16384|16384"
-  "aime25|math_0shot|test|test|10|20|16384|16384"
-  "arc-c|arc_0shot|train|validation|100|null|1024|4096" # 1.12k 299
-  "openbookqa|arc_0shot|train|validation|100|null|1024|4096" # 4k 500 
+  # "aime25|math_0shot|test|test|10|20|16384|16384"
+  # "arc-c|arc_0shot|train|validation|100|null|1024|4096" # 1.12k 299
+  # "openbookqa|arc_0shot|train|validation|100|null|1024|4096" # 4k 500 
   # "gsm8k|gsm8k_0shot|train|test|100|null|2048|4096"
   # "commonsense_qa|arc_0shot|train|validation|100|null|1024|4096" # 9k 1k
 )
@@ -57,11 +57,18 @@ DATASET_SPECS=(
 # -------------------------
 
 # 提取/注入的层数：支持比例（适配不同模型层数），如 1/5 或 0.6（注意：整数如 1 会被当作绝对层号 1）
-LAYER_LIST=(0.2)
+LAYER_LIST=(0.8)
 # Reward 函数中回答长度权重
 ETA0_LIST=(0.01)
 # 注入强度
-KSCALE_LIST=(0.2 0.4)
+KSCALE_LIST=(0.2 0.4 0.6 0.8 1.0 1.2 1.4 1.6 1.8 2.0)
+
+# # 提取/注入的层数：支持比例（适配不同模型层数），如 1/5 或 0.6（注意：整数如 1 会被当作绝对层号 1）
+# LAYER_LIST=(0.2)
+# # Reward 函数中回答长度权重
+# ETA0_LIST=(0.01)
+# # 注入强度
+# KSCALE_LIST=(0.2 0.4)
 
 # LAYER_LIST=(0.8)
 # # Reward 函数中回答长度权重
@@ -120,7 +127,7 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-PY=(python)
+PY=(/opt/conda/envs/easysteer/bin/python)
 if [[ "${USE_CONDA_RUN}" == "1" ]]; then
   PY=(conda run -n "${CONDA_ENV}" python)
 fi

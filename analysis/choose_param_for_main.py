@@ -106,13 +106,25 @@ def select_med_row(
     Med: choose minimum tokens; if saving vs baseline <10%, instead choose
     the minimum-token row whose acc is within ACC_TOL of baseline_acc (if any).
     """
-    med_row = group.sort_values(
+    # Avoid picking the same config as high to keep tiers distinct.
+    is_high_cfg = (
+        (group["offline_candidate_layers"] == high_row["offline_candidate_layers"])
+        & (group["online_k_scale"] == high_row["online_k_scale"])
+    )
+    candidates = group.loc[~is_high_cfg]
+    if candidates.empty:
+        # Fallback: if only one config exists, reuse high to keep output shape.
+        return high_row
+
+    med_row = candidates.sort_values(
         ["token_ratio_vs_baseline", "acc"], ascending=[True, False]
     ).iloc[0]
 
     med_saving = 1.0 - float(med_row["token_ratio_vs_baseline"])
     if med_saving < MIN_MED_SAVING:
-        near_baseline = group[group["acc"] >= group["baseline_acc"].iloc[0] - ACC_TOL]
+        near_baseline = candidates[
+            candidates["acc"] >= candidates["baseline_acc"].iloc[0] - ACC_TOL
+        ]
         if not near_baseline.empty:
             return near_baseline.sort_values(
                 ["token_ratio_vs_baseline", "acc"], ascending=[True, False]

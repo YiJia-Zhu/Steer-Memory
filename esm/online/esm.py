@@ -177,7 +177,8 @@ def run_esm_dataset(
         gen = torch.Generator(device="cpu")
         seed = (abs(hash(vector_path)) + int(cfg.seed)) % (2**31)
         gen.manual_seed(int(seed))
-        noise = torch.randn_like(v, generator=gen)
+        # torch.randn_like may not accept generator on some torch versions; use randn with explicit shape.
+        noise = torch.randn(v.shape, device=v.device, dtype=v.dtype, generator=gen)
         noise_path = Path(noise_dir) / f"noise_{abs(hash(vector_path)) % (10**12)}.pt"
         torch.save(noise, noise_path)
         noise_cache[vector_path] = str(noise_path)
