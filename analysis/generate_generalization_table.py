@@ -128,7 +128,7 @@ def plot_heatmaps(
     tok_penalty: pd.DataFrame,
     norm: mcolors.Normalize,
 ) -> None:
-    fig = plt.figure(figsize=(12.5, 2.6), constrained_layout=False)
+    fig = plt.figure(figsize=(12.5, 1.5), constrained_layout=False)
     gs = fig.add_gridspec(1, 3, width_ratios=[1, 1, 0.1])
     ax_acc = fig.add_subplot(gs[0, 0])
     ax_tok = fig.add_subplot(gs[0, 1])
@@ -153,7 +153,7 @@ def plot_heatmaps(
         ax.set_yticks(range(len(values.index)))
         ax.set_yticklabels([DISPLAY_LABELS.get(r, r) for r in values.index], fontsize=10)
         ax.set_title(title, fontsize=12)
-        ax.set_ylabel("Memory dataset", fontsize=11)
+        ax.set_ylabel("Source dataset", fontsize=11)
         ax.set_xlabel("Target dataset", fontsize=11)
         return im
 
