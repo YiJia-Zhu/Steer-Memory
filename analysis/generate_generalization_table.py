@@ -128,7 +128,7 @@ def plot_heatmaps(
     tok_penalty: pd.DataFrame,
     norm: mcolors.Normalize,
 ) -> None:
-    fig = plt.figure(figsize=(12.5, 1.5), constrained_layout=False)
+    fig = plt.figure(figsize=(12.5, 2), constrained_layout=False)
     gs = fig.add_gridspec(1, 3, width_ratios=[1, 1, 0.1])
     ax_acc = fig.add_subplot(gs[0, 0])
     ax_tok = fig.add_subplot(gs[0, 1])
@@ -189,7 +189,7 @@ def plot_heatmaps(
     fig.subplots_adjust(wspace=0.5, right=0.985)
     cb_pos = ax_cbar.get_position()
     ax_cbar.set_position(
-        [cb_pos.x0 - 0.08, cb_pos.y0, cb_pos.width, cb_pos.height]
+        [cb_pos.x0 - 0.08, cb_pos.y0, cb_pos.width*0.8, cb_pos.height]
     )
     fig.savefig(FIGURE_PATH, dpi=300, bbox_inches="tight")
     plt.close(fig)
