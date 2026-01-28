@@ -28,6 +28,7 @@ MODEL_RUN_ROOTS: Dict[str, Path] = {
 
 # Align colors with latent_tsne_umap.py: red for vanilla (wrong) and green for STIR (right).
 PALETTE = {"greedy": "#FF0000", "esm": "#008200"}
+DISPLAY_NAMES = {"greedy": "Vanilla", "esm": "STIR"}
 HIST_ALPHA = 0.5
 LABEL_FONTSIZE = 20
 TICK_FONTSIZE = 18
@@ -236,6 +237,7 @@ def plot_histogram(
         for label, data in (("greedy", fit_greedy), ("esm", fit_esm)):
             if not data:
                 continue
+            display_label = DISPLAY_NAMES.get(label, label)
             series_mode = _select_fit_mode(fit_mode, data)
             modes = ["normal", "half"] if series_mode == "both" else [series_mode]
             for dist in modes:
@@ -243,13 +245,21 @@ def plot_histogram(
                 if dist == "half":
                     loc = max(0.0, float(min(data)))
                     curve = _half_normal_curve(x_grid, data, scale, loc=loc)
-                    curve_label = f"{label} half-normal fit" if len(modes) > 1 else f"{label} fit"
+                    curve_label = (
+                        f"{display_label} Half-normal Fit"
+                        if len(modes) > 1
+                        else f"{display_label} Fit"
+                    )
                 elif dist == "gmm":
                     curve = _gaussian_mixture_curve(x_grid, data, scale, n_components=gmm_components)
-                    curve_label = f"{label} GMM({gmm_components}) fit"
+                    curve_label = f"{display_label} GMM({gmm_components}) Fit"
                 else:
                     curve = _normal_curve(x_grid, data, scale)
-                    curve_label = f"{label} normal fit" if len(modes) > 1 else f"{label} fit"
+                    curve_label = (
+                        f"{display_label} Normal Fit"
+                        if len(modes) > 1
+                        else f"{display_label} Fit"
+                    )
                 if np.any(curve):
                     plt.plot(
                         x_grid,
@@ -261,7 +271,7 @@ def plot_histogram(
                     )
 
     ax = plt.gca()
-    ax.set_xlabel("Generated tokens", fontsize=LABEL_FONTSIZE)
+    ax.set_xlabel("Generated Tokens", fontsize=LABEL_FONTSIZE)
     ax.set_ylabel("Count", fontsize=LABEL_FONTSIZE)
     # plt.title(f"{model} ({tier}) token usage")
     ax.tick_params(labelsize=TICK_FONTSIZE)
