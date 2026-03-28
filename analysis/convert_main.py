@@ -47,8 +47,8 @@ def format_res(acc, tokens, bold=False):
     except:
         return "\\res{0.0}{0}"
 
-def format_avg(acc, tokens, baseline_acc=None, baseline_tokens=None):
-    """格式化平均结果"""
+def format_avg(acc, tokens, baseline_acc=None, baseline_tokens=None, bold: bool = False):
+    """格式化平均结果；若bold=True则加粗精度数值。"""
     if pd.isna(acc) or pd.isna(tokens):
         return "\\baseavg{0.0}{0}"
     
@@ -60,15 +60,16 @@ def format_avg(acc, tokens, baseline_acc=None, baseline_tokens=None):
     
     acc_pct = acc * 100
     tokens_int = int(tokens)
+    acc_str = f"\\textbf{{{acc_pct:.1f}}}" if bold else f"{acc_pct:.1f}"
     
     if baseline_acc is None:
-        return f"\\baseavg{{{acc_pct:.1f}}}{{{tokens_int:,}}}"
+        return f"\\baseavg{{{acc_str}}}{{{tokens_int:,}}}"
     
     try:
         baseline_acc = float(baseline_acc)
         baseline_tokens = float(baseline_tokens)
     except:
-        return f"\\baseavg{{{acc_pct:.1f}}}{{{tokens_int:,}}}"
+        return f"\\baseavg{{{acc_str}}}{{{tokens_int:,}}}"
     
     delta = (acc - baseline_acc) * 100
     cost_change = ((baseline_tokens - tokens) / baseline_tokens) * 100
@@ -89,7 +90,7 @@ def format_avg(acc, tokens, baseline_acc=None, baseline_tokens=None):
     else:
         cost_str = "\\saving{0\\%}"
     
-    return f"\\avgres{{{acc_pct:.1f}}}{{{delta_str}}}{{{tokens_int:,}}}{{{cost_str}}}"
+    return f"\\avgres{{{acc_str}}}{{{delta_str}}}{{{tokens_int:,}}}{{{cost_str}}}"
 
 def format_method_name(method_display, is_stir, method_key):
     """格式化方法名 - 返回用于插入\textbf{}中的内容"""
@@ -98,10 +99,33 @@ def format_method_name(method_display, is_stir, method_key):
     
     # STIR方法需要特殊处理 - 这里返回 STIR}$_{...}$，其中}用于闭合\textbf{
     if method_key == 'med':
-        return "STIR}$_{{{\\alpha=1.0}}}}$"
+        return "STIR}$_{{{k_{scale}=1.0}}}}$"
     elif method_key == 'high':
-        return "STIR}$_{{{\\alpha=0.75}}}}$"
+        return "STIR}$_{{{k_{scale}=0.75}}}}$"
     return method_display
+
+
+def _pick_best_indices(df: pd.DataFrame, rows: list[int], datasets: list[tuple[str, int, int]]) -> dict[str, int]:
+    """找到每个数据集精度最高的行索引；若并列，选token更少的行。datasets为(name, acc_col, token_col)。"""
+    best: dict[str, int] = {}
+    for ds_name, acc_col, token_col in datasets:
+        best_acc = -np.inf
+        best_tokens = np.inf
+        best_idx = None
+        for idx in rows:
+            acc = df.iloc[idx, acc_col]
+            tok = df.iloc[idx, token_col]
+            if pd.isna(acc):
+                continue
+            acc_val = float(acc)
+            tok_val = float(tok) if not pd.isna(tok) else np.inf
+            if acc_val > best_acc or (np.isclose(acc_val, best_acc) and tok_val < best_tokens):
+                best_acc = acc_val
+                best_tokens = tok_val
+                best_idx = idx
+        if best_idx is not None:
+            best[ds_name] = best_idx
+    return best
 
 # 生成LaTeX
 output = []
@@ -142,6 +166,8 @@ for model in models:
     
     baseline_avg_acc = baseline_row[df.columns[13]]
     baseline_avg_tokens = baseline_row[df.columns[14]]
+    best_idx_by_ds = _pick_best_indices(df, model_methods, datasets)
+    best_idx_avg = _pick_best_indices(df, model_methods, [("avg", 13, 14)])
     
     for row_idx in model_methods:
         row = df.iloc[row_idx]
@@ -169,9 +195,9 @@ for model in models:
         if is_stir:
             # STIR方法特殊处理
             if method_key == 'med':
-                method_text = "\\textbf{STIR}$_{\\alpha=1.0}$"
+                method_text = "\\textbf{STIR}$_{k_{scale}=1.0}$"
             else:  # high
-                method_text = "\\textbf{STIR}$_{\\alpha=0.75}$"
+                method_text = "\\textbf{STIR}$_{k_{scale}=0.75}$"
             
             if row_idx == model_methods[-1]:
                 parts.append(f"\\rowcolor{{blue!5}} \\multirow{{-{len(model_methods)}}}{{*}}{{\\shortstack[l]{{\\textbf{{{model['display']}}}}}}} & {method_text}")
@@ -188,16 +214,18 @@ for model in models:
         for ds_name, acc_col, token_col in datasets:
             acc = row[df.columns[acc_col]]
             tokens = row[df.columns[token_col]]
-            parts.append(format_res(acc, tokens, bold=is_best))
+            bold = best_idx_by_ds.get(ds_name) == row_idx
+            parts.append(format_res(acc, tokens, bold=bold))
         
         # 添加平均值
         avg_acc = row[df.columns[13]]
         avg_tokens = row[df.columns[14]]
         
+        bold_avg = best_idx_avg.get("avg") == row_idx
         if method_key == 'greedy':
-            parts.append(format_avg(avg_acc, avg_tokens))
+            parts.append(format_avg(avg_acc, avg_tokens, bold=bold_avg))
         else:
-            parts.append(format_avg(avg_acc, avg_tokens, baseline_avg_acc, baseline_avg_tokens))
+            parts.append(format_avg(avg_acc, avg_tokens, baseline_avg_acc, baseline_avg_tokens, bold=bold_avg))
         
         output.append(" & ".join(parts) + " \\\\")
     

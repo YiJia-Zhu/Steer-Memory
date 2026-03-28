@@ -29,8 +29,8 @@ GPUS="${GPUS:-0,1,2,3,4,5,6}"
 # Models: <model_key>|<name_or_path>|<tensor_parallel_size>|<max_num_seqs>
 MODEL_SPECS=(
   # Keep model_key aligned with main experiments so eval-only ablations can reuse artifacts.
-  "ds_r1_qwen_7b|huggingface_models/DeepSeek-R1-Distill-Qwen-7B|1|128"
-  # "qwen2p5_3b|huggingface_models/Qwen2.5-3B-Instruct|1|256"
+  # "ds_r1_qwen_7b|huggingface_models/DeepSeek-R1-Distill-Qwen-7B|1|128"
+  "qwen2p5_3b|huggingface_models/Qwen2.5-3B-Instruct|1|256"
 )
 
 # Datasets: <dataset>|<prompt_template>|<train_split>|<eval_split>|<max_train>|<max_eval>|<T_max>|<max_model_len>
@@ -47,7 +47,9 @@ DATASET_SPECS=(
 
 # Ablations to run (comma-separated from the list above).
 # ABLATIONS="${ABLATIONS:-random_mining,top1_memory,use_random_memory,random_use_memory,no_probing,first_step_only}"
-ABLATIONS="${ABLATIONS:-top1_memory}"
+# ABLATIONS="${ABLATIONS:-random_mining}"
+# ABLATIONS="${ABLATIONS:-random_mining,top1_memory,random_use_memory,no_probing,first_step_only}"
+ABLATIONS="${ABLATIONS:-top1_memory,random_use_memory,no_probing}"
 
 # Base config template.
 BASE_CFG="${BASE_CFG:-configs/default}"

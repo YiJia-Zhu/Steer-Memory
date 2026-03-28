@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from esm.analysis.cases import _index_by_id
+from esm.analysis.cases import _index_by_id, render_output_with_injection_markers
 from esm.config import ESMConfig
 from esm.data.loaders import load_task_dataset
 from esm.online.esm import run_esm_dataset
@@ -149,8 +149,10 @@ def run_case(
                 lines.append("")
                 lines.append(_format_esm_steps(steps))
                 lines.append("")
+            lines.append("**ESM output (inline injected markers)**")
+            lines.append("")
             lines.append("```")
-            lines.append(str(e.get("text", ""))[:4000])
+            lines.append(render_output_with_injection_markers(e, max_chars=4000))
             lines.append("```")
             lines.append("")
 

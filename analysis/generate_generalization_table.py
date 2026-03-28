@@ -175,10 +175,11 @@ def plot_heatmaps(
     cbar = fig.colorbar(acc_img, cax=ax_cbar, orientation="vertical")
     cbar.set_ticks([])
     cbar.set_label("", fontsize=9)
+    cbar.ax.invert_yaxis()
     ax_cbar.text(
         1.15,
         0.5,
-        "Worse →",
+        "Better →",
         transform=ax_cbar.transAxes,
         ha="left",
         va="center",

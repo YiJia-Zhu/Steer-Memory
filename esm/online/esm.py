@@ -142,6 +142,48 @@ class _BatchState:
     final_finish_reason: str | None = None
     stopped_early: bool = False
     step_logs: list[dict[str, Any]] = field(default_factory=list)
+    segments: list[dict[str, Any]] = field(default_factory=list)
+
+
+def _step_is_injected(step: dict[str, Any]) -> bool:
+    if str(step.get("phase", "") or "").lower() == "tail":
+        return False
+    if str(step.get("chosen", "null") or "null").lower() == "null":
+        return False
+    try:
+        return float(step.get("chosen_scale", 0.0) or 0.0) > 0.0
+    except Exception:
+        return False
+
+
+def _build_segment_record(
+    *,
+    assistant_text_so_far: str,
+    seg_text: str,
+    seg_ids: list[int],
+    finish_reason: str | None,
+    step: dict[str, Any],
+) -> dict[str, Any]:
+    start_char = int(len(assistant_text_so_far))
+    end_char = int(start_char + len(seg_text))
+    chosen_layer = step.get("chosen_layer")
+    layer = None if chosen_layer is None else int(chosen_layer)
+    chosen_entry_type = step.get("chosen_entry_type")
+    injected = _step_is_injected(step)
+    return {
+        "m": int(step.get("m", 0)),
+        "mem_m": int(step.get("mem_m")) if step.get("mem_m") is not None else None,
+        "phase": str(step.get("phase", "commit") or "commit"),
+        "start_char": int(start_char),
+        "end_char": int(end_char),
+        "token_count": int(len(seg_ids)),
+        "finish_reason": finish_reason,
+        "injected": bool(injected),
+        "tool_name": str(step.get("chosen")) if injected else None,
+        "layer": layer if injected else None,
+        "entry_type": str(chosen_entry_type) if injected and chosen_entry_type is not None else None,
+        "scale": float(step.get("chosen_scale", 0.0) or 0.0) if injected else 0.0,
+    }
 
 
 def run_esm_dataset(
@@ -375,6 +417,9 @@ def run_esm_dataset(
                                 "chosen": "null",
                                 "chosen_score": 0.0,
                                 "chosen_scale": 0.0,
+                                "chosen_layer": None,
+                                "chosen_entry_type": None,
+                                "injected": False,
                                 "candidates": [{"name": "null", "score": 0.0}],
                                 "note": "mem_m=0 (no offline control point)",
                             }
@@ -390,6 +435,9 @@ def run_esm_dataset(
                                 "chosen": "null",
                                 "chosen_score": 0.0,
                                 "chosen_scale": 0.0,
+                                "chosen_layer": None,
+                                "chosen_entry_type": None,
+                                "injected": False,
                                 "candidates": [{"name": "null", "score": 0.0}],
                                 "note": note,
                             }
@@ -405,6 +453,9 @@ def run_esm_dataset(
                                 "chosen": "null",
                                 "chosen_score": 0.0,
                                 "chosen_scale": 0.0,
+                                "chosen_layer": None,
+                                "chosen_entry_type": None,
+                                "injected": False,
                                 "candidates": [{"name": "null", "score": 0.0}],
                                 "note": note,
                             }
@@ -419,6 +470,9 @@ def run_esm_dataset(
                                 "chosen": "null",
                                 "chosen_score": 0.0,
                                 "chosen_scale": 0.0,
+                                "chosen_layer": None,
+                                "chosen_entry_type": None,
+                                "injected": False,
                                 "candidates": [{"name": "null", "score": 0.0}],
                                 "note": "variant=no_memory",
                             }
@@ -572,6 +626,7 @@ def run_esm_dataset(
                                 "best_name": str(best_name),
                                 "best_score": float(best_score),
                                 "chosen_scale": float(chosen_scale),
+                                "chosen_entry": chosen_entry,
                                 "chosen_req": chosen_req,
                                 "scored": scored,
                             }
@@ -727,6 +782,7 @@ def run_esm_dataset(
                                     "best_name": str(best_name),
                                     "best_score": float(best_score),
                                     "chosen_scale": float(chosen_scale),
+                                    "chosen_entry": chosen_entry,
                                     "chosen_req": chosen_req,
                                     "scored": scored,
                                     "mem_info": mem_info,
@@ -743,6 +799,11 @@ def run_esm_dataset(
                         best_name = str(meta.get("best_name", "null"))
                         best_score = float(meta.get("best_score", float(beta) * float(null_ahat)))
                         chosen_scale = float(meta.get("chosen_scale", 0.0))
+                        chosen_entry = meta.get("chosen_entry", None)
+                        chosen_layer = int(chosen_entry.layer) if chosen_entry is not None else None
+                        chosen_entry_type = (
+                            str(chosen_entry.entry_type) if chosen_entry is not None and chosen_entry.entry_type is not None else None
+                        )
                         scored = meta.get("scored") or [{"name": "null", "score": 0.0}]
 
                         ctx = step_ctx[int(i)]
@@ -754,6 +815,9 @@ def run_esm_dataset(
                                 "chosen": str(best_name),
                                 "chosen_score": float(best_score),
                                 "chosen_scale": float(chosen_scale),
+                                "chosen_layer": chosen_layer,
+                                "chosen_entry_type": chosen_entry_type,
+                                "injected": bool(chosen_entry is not None and float(chosen_scale) > 0.0 and str(best_name) != "null"),
                                 "null_ahat": float(null_ahat),
                                 "candidates": scored,
                                 "mem_reason": str(mem_info.get("reason")) if isinstance(mem_info, dict) else None,
@@ -773,14 +837,23 @@ def run_esm_dataset(
                     seg_text, seg_ids, _, finish_reason = comp
                     spent_commit = int(len(seg_ids))
                     st = states[int(i)]
+                    ctx = step_ctx.get(int(i), {"m": int(m), "mem_m": int(mem_m), "remaining_before": 0})
+                    ctx["spent_commit"] = int(spent_commit)
+                    ctx["spent_total"] = int(int(ctx.get("spent_probe", 0)) + int(spent_commit))
+                    st.segments.append(
+                        _build_segment_record(
+                            assistant_text_so_far=st.assistant_text,
+                            seg_text=seg_text,
+                            seg_ids=seg_ids,
+                            finish_reason=finish_reason,
+                            step=ctx,
+                        )
+                    )
                     st.committed_used += int(spent_commit)
                     st.prefix = st.prefix + seg_text
                     st.assistant_text += seg_text
                     st.committed_token_ids.extend(seg_ids)
                     st.final_finish_reason = finish_reason
-                    ctx = step_ctx.get(int(i), {"m": int(m), "mem_m": int(mem_m), "remaining_before": 0})
-                    ctx["spent_commit"] = int(spent_commit)
-                    ctx["spent_total"] = int(int(ctx.get("spent_probe", 0)) + int(spent_commit))
                     st.step_logs.append(ctx)
                     if not bool(st.prefix.endswith(delimiter)):
                         st.stopped_early = True
@@ -840,26 +913,37 @@ def run_esm_dataset(
                     tail_text, tail_tok_ids, _, finish_reason = comp
                     spent_tail = int(len(tail_tok_ids))
                     st = states[int(i)]
+                    tail_step = {
+                        "m": int(M) + 1,
+                        "phase": "tail",
+                        "remaining_before": int(T_max) - int(st.committed_used),
+                        "probe_tokens_per_cand": 0,
+                        "spent_probe": 0,
+                        "spent_commit": int(spent_tail),
+                        "spent_total": int(spent_tail),
+                        "chosen": "null",
+                        "chosen_score": 0.0,
+                        "chosen_scale": 0.0,
+                        "chosen_layer": None,
+                        "chosen_entry_type": None,
+                        "injected": False,
+                        "candidates": [{"name": "null", "score": 0.0}],
+                    }
+                    st.segments.append(
+                        _build_segment_record(
+                            assistant_text_so_far=st.assistant_text,
+                            seg_text=tail_text,
+                            seg_ids=tail_tok_ids,
+                            finish_reason=finish_reason,
+                            step=tail_step,
+                        )
+                    )
                     st.committed_used += int(spent_tail)
                     st.prefix = st.prefix + tail_text
                     st.assistant_text += tail_text
                     st.committed_token_ids.extend(tail_tok_ids)
                     st.final_finish_reason = finish_reason
-                    st.step_logs.append(
-                        {
-                            "m": int(M) + 1,
-                            "phase": "tail",
-                            "remaining_before": int(T_max) - int(st.committed_used) + int(spent_tail),
-                            "probe_tokens_per_cand": 0,
-                            "spent_probe": 0,
-                            "spent_commit": int(spent_tail),
-                            "spent_total": int(spent_tail),
-                            "chosen": "null",
-                            "chosen_score": 0.0,
-                            "chosen_scale": 0.0,
-                            "candidates": [{"name": "null", "score": 0.0}],
-                        }
-                    )
+                    st.step_logs.append(tail_step)
 
             for st in states:
                 pred = extract_pred(st.ex.task, st.assistant_text)
@@ -878,6 +962,7 @@ def run_esm_dataset(
                         "finish_reason": st.final_finish_reason,
                         "text": st.assistant_text,
                         "steps": st.step_logs,
+                        "segments": st.segments,
                     }
                 )
 
@@ -927,6 +1012,32 @@ def run_esm_dataset(
         stopped_early = False
 
         step_logs: list[dict[str, Any]] = []
+        segments: list[dict[str, Any]] = []
+
+        def _commit_segment_single(
+            *,
+            seg_text: str,
+            seg_ids: list[int],
+            finish_reason: str | None,
+            step_log: dict[str, Any],
+        ) -> None:
+            nonlocal prefix, assistant_text, committed_used, final_finish_reason
+
+            segments.append(
+                _build_segment_record(
+                    assistant_text_so_far=assistant_text,
+                    seg_text=seg_text,
+                    seg_ids=seg_ids,
+                    finish_reason=finish_reason,
+                    step=step_log,
+                )
+            )
+            committed_used += int(len(seg_ids))
+            prefix = prefix + seg_text
+            assistant_text += seg_text
+            committed_token_ids.extend(seg_ids)
+            final_finish_reason = finish_reason
+            step_logs.append(step_log)
 
         for m in range(1, M + 1):
             remaining_before = int(T_max) - int(committed_used)
@@ -947,13 +1058,11 @@ def run_esm_dataset(
                     steer_req=None,
                 )
                 spent_commit = int(len(seg_ids))
-                committed_used += int(spent_commit)
-                prefix = prefix + seg_text
-                assistant_text += seg_text
-                committed_token_ids.extend(seg_ids)
-                final_finish_reason = finish_reason
-                step_logs.append(
-                    {
+                _commit_segment_single(
+                    seg_text=seg_text,
+                    seg_ids=seg_ids,
+                    finish_reason=finish_reason,
+                    step_log={
                         "m": int(m),
                         "mem_m": int(mem_m),
                         "remaining_before": int(remaining_before),
@@ -964,9 +1073,12 @@ def run_esm_dataset(
                         "chosen": "null",
                         "chosen_score": 0.0,
                         "chosen_scale": 0.0,
+                        "chosen_layer": None,
+                        "chosen_entry_type": None,
+                        "injected": False,
                         "candidates": [{"name": "null", "score": 0.0}],
                         "note": "mem_m=0 (no offline control point)",
-                    }
+                    },
                 )
                 if not bool(prefix.endswith(delimiter)):
                     stopped_early = True
@@ -983,13 +1095,11 @@ def run_esm_dataset(
                     steer_req=None,
                 )
                 spent_commit = int(len(seg_ids))
-                committed_used += int(spent_commit)
-                prefix = prefix + seg_text
-                assistant_text += seg_text
-                committed_token_ids.extend(seg_ids)
-                final_finish_reason = finish_reason
-                step_logs.append(
-                    {
+                _commit_segment_single(
+                    seg_text=seg_text,
+                    seg_ids=seg_ids,
+                    finish_reason=finish_reason,
+                    step_log={
                         "m": int(m),
                         "mem_m": int(mem_m),
                         "remaining_before": int(remaining_before),
@@ -1000,9 +1110,12 @@ def run_esm_dataset(
                         "chosen": "null",
                         "chosen_score": 0.0,
                         "chosen_scale": 0.0,
+                        "chosen_layer": None,
+                        "chosen_entry_type": None,
+                        "injected": False,
                         "candidates": [{"name": "null", "score": 0.0}],
                         "note": note,
-                    }
+                    },
                 )
                 if not bool(prefix.endswith(delimiter)):
                     stopped_early = True
@@ -1019,13 +1132,11 @@ def run_esm_dataset(
                     steer_req=None,
                 )
                 spent_commit = int(len(seg_ids))
-                committed_used += int(spent_commit)
-                prefix = prefix + seg_text
-                assistant_text += seg_text
-                committed_token_ids.extend(seg_ids)
-                final_finish_reason = finish_reason
-                step_logs.append(
-                    {
+                _commit_segment_single(
+                    seg_text=seg_text,
+                    seg_ids=seg_ids,
+                    finish_reason=finish_reason,
+                    step_log={
                         "m": int(m),
                         "mem_m": int(mem_m),
                         "remaining_before": int(remaining_before),
@@ -1036,9 +1147,12 @@ def run_esm_dataset(
                         "chosen": "null",
                         "chosen_score": 0.0,
                         "chosen_scale": 0.0,
+                        "chosen_layer": None,
+                        "chosen_entry_type": None,
+                        "injected": False,
                         "candidates": [{"name": "null", "score": 0.0}],
                         "note": note,
-                    }
+                    },
                 )
                 if not bool(prefix.endswith(delimiter)):
                     stopped_early = True
@@ -1054,13 +1168,11 @@ def run_esm_dataset(
                     steer_req=None,
                 )
                 spent_commit = int(len(seg_ids))
-                committed_used += int(spent_commit)
-                prefix = prefix + seg_text
-                assistant_text += seg_text
-                committed_token_ids.extend(seg_ids)
-                final_finish_reason = finish_reason
-                step_logs.append(
-                    {
+                _commit_segment_single(
+                    seg_text=seg_text,
+                    seg_ids=seg_ids,
+                    finish_reason=finish_reason,
+                    step_log={
                         "m": int(m),
                         "mem_m": int(mem_m),
                         "remaining_before": int(remaining_before),
@@ -1071,9 +1183,12 @@ def run_esm_dataset(
                         "chosen": "null",
                         "chosen_score": 0.0,
                         "chosen_scale": 0.0,
+                        "chosen_layer": None,
+                        "chosen_entry_type": None,
+                        "injected": False,
                         "candidates": [{"name": "null", "score": 0.0}],
                         "note": "variant=no_memory",
-                    }
+                    },
                 )
                 if not bool(prefix.endswith(delimiter)):
                     stopped_early = True
@@ -1272,14 +1387,11 @@ def run_esm_dataset(
                 steer_req=chosen_req,
             )
             spent_commit = int(len(seg_ids))
-            committed_used += int(spent_commit)
-            prefix = prefix + seg_text
-            assistant_text += seg_text
-            committed_token_ids.extend(seg_ids)
-            final_finish_reason = finish_reason
-
-            step_logs.append(
-                {
+            _commit_segment_single(
+                seg_text=seg_text,
+                seg_ids=seg_ids,
+                finish_reason=finish_reason,
+                step_log={
                     "m": int(m),
                     "mem_m": int(mem_m),
                     "remaining_before": int(remaining_before),
@@ -1291,13 +1403,18 @@ def run_esm_dataset(
                     "chosen": str(best_name),
                     "chosen_score": float(best_score),
                     "chosen_scale": float(chosen_scale),
+                    "chosen_layer": int(chosen_entry.layer) if chosen_entry is not None else None,
+                    "chosen_entry_type": (
+                        str(chosen_entry.entry_type) if chosen_entry is not None and chosen_entry.entry_type is not None else None
+                    ),
+                    "injected": bool(chosen_entry is not None and float(chosen_scale) > 0.0 and str(best_name) != "null"),
                     "null_ahat": float(null_ahat),
                     "candidates": scored,
                     "mem_reason": str(mem_info.get("reason")) if isinstance(mem_info, dict) else None,
                     "mem_n_entries": int(mem_info.get("n_entries_m")) if isinstance(mem_info, dict) and mem_info.get("n_entries_m") is not None else None,
                     "mem_top_sim": float(mem_info.get("top_sim")) if isinstance(mem_info, dict) and mem_info.get("top_sim") is not None else None,
                     "note": f"variant={variant}",
-                }
+                },
             )
 
             if not bool(prefix.endswith(delimiter)):
@@ -1315,13 +1432,11 @@ def run_esm_dataset(
                 steer_req=None,
             )
             spent_tail = int(len(tail_ids))
-            committed_used += int(spent_tail)
-            prefix = prefix + tail_text
-            assistant_text += tail_text
-            committed_token_ids.extend(tail_ids)
-            final_finish_reason = finish_reason
-            step_logs.append(
-                {
+            _commit_segment_single(
+                seg_text=tail_text,
+                seg_ids=tail_ids,
+                finish_reason=finish_reason,
+                step_log={
                     "m": int(M) + 1,
                     "phase": "tail",
                     "remaining_before": int(remaining_tail),
@@ -1332,8 +1447,11 @@ def run_esm_dataset(
                     "chosen": "null",
                     "chosen_score": 0.0,
                     "chosen_scale": 0.0,
+                    "chosen_layer": None,
+                    "chosen_entry_type": None,
+                    "injected": False,
                     "candidates": [{"name": "null", "score": 0.0}],
-                }
+                },
             )
 
         pred = extract_pred(ex.task, assistant_text)
@@ -1355,6 +1473,7 @@ def run_esm_dataset(
                 "finish_reason": final_finish_reason,
                 "text": assistant_text,
                 "steps": step_logs,
+                "segments": segments,
             }
         )
 

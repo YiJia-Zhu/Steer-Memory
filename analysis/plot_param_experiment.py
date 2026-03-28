@@ -27,28 +27,28 @@ COLORS = sns.color_palette("Paired")
 # Per-figure y-lims for easy tweaking
 YLIMS = {
     "math500_param_by_k": {
-        "tokens": (2100, 3600),
-        "tokens_ticks": [2100, 2600, 3100, 3600],
-        "acc": (77, 92),
-        "acc_ticks": [77, 82, 87, 92],
+        "tokens": (1500, 4500),
+        "tokens_ticks": [1500, 2500, 3500, 4500],
+        "acc": (64, 100),
+        "acc_ticks": [64, 76, 88, 100],
     },
     "math500_param_by_layer": {
-        "tokens": (2000, 3500),
-        "tokens_ticks": [2000, 2500, 3000, 3500],
-        "acc": (80, 95),
-        "acc_ticks": [80, 85, 90, 95],
+        "tokens": (1500, 4500),
+        "tokens_ticks": [1500, 2500, 3500, 4500],
+        "acc": (64, 100),
+        "acc_ticks": [64, 76, 88, 100],
     },
     "amc23_param_by_k": {
-        "tokens": (4600, 5800),
-        "tokens_ticks": [4600, 5000, 5400, 5800],
-        "acc": (80, 92),
-        "acc_ticks": [80, 84, 88, 92],
+        "tokens": (2000, 6500),
+        "tokens_ticks": [2000, 3500, 5000, 6500],
+        "acc": (70, 100),
+        "acc_ticks": [70, 80, 90, 100],
     },
     "amc23_param_by_layer": {
-        "tokens": (4000, 5800),
-        "tokens_ticks": [4000, 4600, 5200, 5800],
-        "acc": (80, 95),
-        "acc_ticks": [80, 85, 90, 95],
+        "tokens": (2000, 6500),
+        "tokens_ticks": [2000, 3500, 5000, 6500],
+        "acc": (70, 100),
+        "acc_ticks": [70, 80, 90, 100],
     },
 }
 
@@ -139,7 +139,7 @@ def plot_bar_line(
         handletextpad=0.2,
         columnspacing=1,
         frameon=True,
-        bbox_to_anchor=(0.2, 0.96),
+        bbox_to_anchor=(0.175, 0.96),
     )
     plt.tight_layout()
 
@@ -168,8 +168,8 @@ def main():
             dataset=dataset,
             varying_col="online_k_scale",
             fixed_col="offline_candidate_layers",
-            fixed_val=0.8,
-            xlabel="Strength",
+            fixed_val=0.6,
+            xlabel="Injection Strength",
             outfile=out_dir / f"{dataset}_param_by_k.pdf",
             color_idx=bar_idx,
             hatch_idx=hatch_idx,
@@ -187,7 +187,7 @@ def main():
             varying_col="offline_candidate_layers",
             fixed_col="online_k_scale",
             fixed_val=1.0,
-            xlabel="Layer",
+            xlabel="Normalized Layer Depth",
             outfile=out_dir / f"{dataset}_param_by_layer.pdf",
             color_idx=bar_idx,
             hatch_idx=hatch_idx,

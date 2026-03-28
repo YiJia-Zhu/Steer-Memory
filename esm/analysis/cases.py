@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from esm.data.loaders import load_task_dataset
 from esm.utils.io import read_jsonl, write_text
@@ -8,6 +9,84 @@ from esm.utils.io import read_jsonl, write_text
 
 def _index_by_id(rows: list[dict]) -> dict[str, dict]:
     return {str(r["example_id"]): r for r in rows}
+
+
+def _safe_int(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return int(default)
+
+
+def _segment_marker(text: str, start_char: int, seg: dict[str, Any]) -> str:
+    parts = [f"m={_safe_int(seg.get('m'), 0)}"]
+    if seg.get("layer") is not None:
+        parts.append(f"layer={_safe_int(seg.get('layer'), 0)}")
+    tool_name = seg.get("tool_name")
+    if tool_name:
+        parts.append(f"tool={tool_name}")
+    marker = f"<<< injected {' '.join(parts)} >>>"
+    prev_char = text[start_char - 1] if start_char > 0 and start_char - 1 < len(text) else ""
+    next_char = text[start_char] if start_char < len(text) else ""
+    prefix = "" if not prev_char or prev_char.isspace() else " "
+    suffix = "" if not next_char or next_char.isspace() else " "
+    return f"{prefix}{marker}{suffix}"
+
+
+def render_output_with_injection_markers(row: dict[str, Any], *, max_chars: int | None = None) -> str:
+    text = str(row.get("text", "") or "")
+    segments = row.get("segments")
+    if not isinstance(segments, list) or not segments:
+        return text[:max_chars] if max_chars is not None else text
+
+    parts: list[str] = []
+    used = 0
+    cursor = 0
+
+    def append_piece(piece: str, *, allow_truncate: bool) -> bool:
+        nonlocal used
+        if piece == "":
+            return False
+        if max_chars is None:
+            parts.append(piece)
+            used += len(piece)
+            return False
+        remaining = int(max_chars) - int(used)
+        if remaining <= 0:
+            return True
+        if len(piece) <= remaining:
+            parts.append(piece)
+            used += len(piece)
+            return False
+        if allow_truncate:
+            parts.append(piece[:remaining])
+            used += remaining
+        return True
+
+    for seg in segments:
+        if not isinstance(seg, dict):
+            continue
+        start = _safe_int(seg.get("start_char"), cursor)
+        end = _safe_int(seg.get("end_char"), start)
+        start = max(cursor, min(len(text), start))
+        end = max(start, min(len(text), end))
+
+        if start > cursor and append_piece(text[cursor:start], allow_truncate=True):
+            return "".join(parts)
+
+        if bool(seg.get("injected")):
+            marker = _segment_marker(text, start, seg)
+            if append_piece(marker, allow_truncate=False):
+                return "".join(parts)
+
+        if append_piece(text[start:end], allow_truncate=True):
+            return "".join(parts)
+        cursor = end
+
+    if cursor < len(text):
+        append_piece(text[cursor:], allow_truncate=True)
+
+    return "".join(parts)
 
 
 def write_case_markdown(
@@ -77,10 +156,10 @@ def write_case_markdown(
         lines.append("")
         lines.append(f"**ESM pred**: {e.get('pred')}  | correct={e.get('correct')}")
         lines.append("")
-        lines.append("**ESM output**")
+        lines.append("**ESM output (inline injected markers)**")
         lines.append("")
         lines.append("```")
-        lines.append(str(e.get("text", ""))[:2000])
+        lines.append(render_output_with_injection_markers(e, max_chars=2000))
         lines.append("```")
         lines.append("")
 
@@ -106,8 +185,10 @@ def write_case_markdown(
         lines.append("")
         lines.append(f"**ESM pred**: {e.get('pred')}  | correct={e.get('correct')}")
         lines.append("")
+        lines.append("**ESM output (inline injected markers)**")
+        lines.append("")
         lines.append("```")
-        lines.append(str(e.get("text", ""))[:2000])
+        lines.append(render_output_with_injection_markers(e, max_chars=2000))
         lines.append("```")
         lines.append("")
 
@@ -116,6 +197,5 @@ def write_case_markdown(
     out_path = out_dir / f"cases_T{T_max}.md"
     write_text(out_path, "\n".join(lines) + "\n")
     return str(out_path)
-
 
 
