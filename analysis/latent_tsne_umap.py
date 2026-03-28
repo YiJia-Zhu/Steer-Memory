@@ -1,5 +1,5 @@
 """
-Visualize hidden-state artifacts (mine/library/memory) with t-SNE / UMAP.
+Visualize hidden-state artifacts (mine/library/memory) with PCA / t-SNE / UMAP.
 
 The script loads key vectors (and optional delta vectors) from a run directory,
 reduces them to 2D, and saves stage-colored scatter plots. It can also attempt
@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 import seaborn as sns
@@ -24,10 +25,18 @@ matplotlib.use("Agg")  # non-interactive backend for batch runs
 import matplotlib.pyplot as plt
 
 try:
+    from sklearn.decomposition import PCA as SklearnPCA
+except Exception:  # pragma: no cover - optional dependency
+    SklearnPCA = None
+
+try:
     from sklearn.manifold import TSNE
-    from sklearn.preprocessing import StandardScaler
 except Exception:  # pragma: no cover - optional dependency
     TSNE = None
+
+try:
+    from sklearn.preprocessing import StandardScaler
+except Exception:  # pragma: no cover - optional dependency
     StandardScaler = None
 
 try:
@@ -41,7 +50,7 @@ DEFAULT_RUN_ROOT = REPO_ROOT / "outputs" / "main_ds_r1_qwen_7b_math500"
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="t-SNE/UMAP over hidden-state artifacts.")
+    parser = argparse.ArgumentParser(description="PCA/t-SNE/UMAP over hidden-state artifacts.")
     parser.add_argument(
         "--run-dir",
         type=Path,
@@ -74,6 +83,27 @@ def parse_args() -> argparse.Namespace:
         "--include-delta",
         action="store_true",
         help="Also plot delta vectors (vector_path) in addition to hidden states (key_path).",
+    )
+    parser.add_argument(
+        "--preprocess",
+        type=str,
+        choices=["standardize", "center", "l2", "none"],
+        default="standardize",
+        help="Feature preprocessing before PCA/t-SNE/UMAP.",
+    )
+    parser.add_argument(
+        "--pca-whiten",
+        action="store_true",
+        help="Whiten PCA coordinates to unit variance per principal component.",
+    )
+    parser.add_argument(
+        "--pca-pairs",
+        nargs="*",
+        default=["1,2"],
+        help=(
+            "PCA component pairs to plot, e.g. --pca-pairs 1,2 1,3 2,3. "
+            "Default: 1,2."
+        ),
     )
     parser.add_argument("--perplexity", type=float, default=20.0, help="t-SNE perplexity.")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for reducers.")
@@ -138,6 +168,57 @@ def standardize(features: np.ndarray) -> np.ndarray:
     return StandardScaler().fit_transform(features)
 
 
+def center_features(features: np.ndarray) -> np.ndarray:
+    return features - features.mean(axis=0, keepdims=True)
+
+
+def l2_normalize_rows(features: np.ndarray, eps: float = 1e-12) -> np.ndarray:
+    norms = np.linalg.norm(features, axis=1, keepdims=True)
+    norms = np.clip(norms, eps, None)
+    return features / norms
+
+
+def preprocess_features(features: np.ndarray, mode: str) -> np.ndarray:
+    mode = str(mode).strip().lower()
+    if mode == "standardize":
+        return standardize(features)
+    if mode == "center":
+        return center_features(features)
+    if mode == "l2":
+        return l2_normalize_rows(features)
+    if mode == "none":
+        return features.astype(np.float32, copy=False)
+    raise ValueError(f"Unknown preprocess mode: {mode}")
+
+
+def parse_pca_pairs(raw_pairs: Sequence[str]) -> list[tuple[int, int]]:
+    pairs: list[tuple[int, int]] = []
+    seen: set[tuple[int, int]] = set()
+    tokens: list[str] = []
+    for item in raw_pairs:
+        if item is None:
+            continue
+        tokens.extend(str(item).replace(";", " ").split())
+
+    if not tokens:
+        tokens = ["1,2"]
+
+    for token in tokens:
+        nums = [x for x in re.split(r"[^0-9]+", token) if x]
+        if len(nums) != 2:
+            raise ValueError(f"Invalid PCA pair '{token}'. Expected forms like 1,2 or 1:3.")
+        a, b = int(nums[0]), int(nums[1])
+        if a <= 0 or b <= 0:
+            raise ValueError(f"PCA components must be positive, got: {token}")
+        if a == b:
+            raise ValueError(f"PCA pair must use two distinct components, got: {token}")
+        pair = (a, b)
+        if pair not in seen:
+            seen.add(pair)
+            pairs.append(pair)
+    return pairs
+
+
 def compute_tsne(features: np.ndarray, seed: int, perplexity: float) -> np.ndarray | None:
     if TSNE is None:
         print("Skipping t-SNE: scikit-learn not installed.")
@@ -152,6 +233,37 @@ def compute_tsne(features: np.ndarray, seed: int, perplexity: float) -> np.ndarr
         random_state=seed,
     )
     return tsne.fit_transform(features)
+
+
+def compute_pca(
+    features: np.ndarray,
+    *,
+    n_components: int,
+    whiten: bool = False,
+) -> tuple[np.ndarray | None, np.ndarray | None]:
+    if len(features) == 0:
+        return None, None
+    n_samples, n_features = features.shape
+    eff_components = int(min(max(1, int(n_components)), n_samples, n_features))
+    if eff_components <= 0:
+        return None, None
+    if SklearnPCA is not None:
+        reducer = SklearnPCA(n_components=eff_components, whiten=bool(whiten))
+        coords = reducer.fit_transform(features)
+        explained = getattr(reducer, "explained_variance_ratio_", None)
+        explained_arr = None if explained is None else np.asarray(explained, dtype=np.float32)
+        return np.asarray(coords, dtype=np.float32), explained_arr
+
+    centered = features - features.mean(axis=0, keepdims=True)
+    u, s, _ = np.linalg.svd(centered, full_matrices=False)
+    coords = u[:, :eff_components] * s[:eff_components]
+    if bool(whiten):
+        denom = s[:eff_components] / np.sqrt(max(1, n_samples - 1))
+        denom = np.clip(denom, 1e-12, None)
+        coords = coords / denom
+    total_var = np.square(s).sum()
+    explained_ratio = np.square(s[:eff_components]) / max(total_var, 1e-12)
+    return np.asarray(coords, dtype=np.float32), np.asarray(explained_ratio, dtype=np.float32)
 
 
 def compute_umap(
@@ -180,11 +292,21 @@ def plot_embedding(
     line_alpha: float = 0.4,
     line_width: float = 0.8,
     axis_limit: float | None = None,
+    x_label: str | None = None,
+    y_label: str | None = None,
 ) -> None:
     if coords is None or len(coords) == 0:
         return
 
-    emb_name = "t-SNE" if "tsne" in out_path.stem.lower() else "UMAP"
+    stem = out_path.stem.lower()
+    if "tsne" in stem:
+        emb_name = "t-SNE"
+    elif "umap" in stem:
+        emb_name = "UMAP"
+    elif "pca" in stem:
+        emb_name = "PCA"
+    else:
+        emb_name = "Embedding"
     stages = sorted({row["stage"] for row in meta})
     entry_types = sorted({row["entry_type"] for row in meta})
     stage_colors = {s: plt.cm.tab10(i % 10) for i, s in enumerate(stages)}
@@ -232,8 +354,8 @@ def plot_embedding(
                 zorder=3,
         )
 
-    ax.set_xlabel(f"{emb_name} Dimension 1", fontsize=LABEL_FONTSIZE)
-    ax.set_ylabel(f"{emb_name} Dimension 2", fontsize=LABEL_FONTSIZE)
+    ax.set_xlabel(x_label or f"{emb_name} Dimension 1", fontsize=LABEL_FONTSIZE)
+    ax.set_ylabel(y_label or f"{emb_name} Dimension 2", fontsize=LABEL_FONTSIZE)
     ax.tick_params(labelsize=TICK_FONTSIZE)
     if pair_edges:
         edge_color = "#666666"
@@ -249,7 +371,7 @@ def plot_embedding(
             )
     # if axis_limit is not None:
         # ax.set_xlim(-30, 30)
-    ax.set_ylim(-32, 32)
+    # ax.set_ylim(-32, 32)
     ax.set_autoscale_on(False)
     legend = ax.legend(
         frameon=True,
@@ -422,6 +544,21 @@ def build_pair_edges(meta: Sequence[dict[str, Any]]) -> list[tuple[int, int, str
     return edges
 
 
+def pca_output_path(out_dir: Path, stem: str, pair: tuple[int, int]) -> Path:
+    a, b = pair
+    if pair == (1, 2):
+        return out_dir / f"{stem}.pdf"
+    return out_dir / f"{stem}_pc{int(a)}_pc{int(b)}.pdf"
+
+
+def pca_axis_label(component_idx: int, explained_ratio: np.ndarray | None) -> str:
+    label = f"PC{int(component_idx)}"
+    if explained_ratio is not None and 0 <= int(component_idx) - 1 < len(explained_ratio):
+        pct = 100.0 * float(explained_ratio[int(component_idx) - 1])
+        label = f"{label} ({pct:.1f}%)"
+    return label
+
+
 def main() -> None:
     args = parse_args()
     run_dir = resolve_run_dir(args.run_dir)
@@ -476,9 +613,36 @@ def main() -> None:
     if not all_state_records:
         raise RuntimeError("No hidden-state vectors loaded; nothing to plot.")
 
-    state_matrix = flatten_vectors(all_state_records)
-    state_matrix = standardize(state_matrix)
+    pca_pairs = parse_pca_pairs(args.pca_pairs)
+
+    state_matrix = preprocess_features(flatten_vectors(all_state_records), mode=args.preprocess)
     pair_edges = build_pair_edges(all_state_records)
+
+    max_pc = max(max(pair) for pair in pca_pairs)
+    pca_coords_full, pca_ratio = compute_pca(
+        state_matrix,
+        n_components=int(max_pc),
+        whiten=bool(args.pca_whiten),
+    )
+    if pca_coords_full is not None:
+        for pair in pca_pairs:
+            if max(pair) > int(pca_coords_full.shape[1]):
+                print(
+                    f"Skipping PCA pair {pair}: only {int(pca_coords_full.shape[1])} components available."
+                )
+                continue
+            a, b = pair
+            plot_embedding(
+                coords=pca_coords_full[:, [int(a) - 1, int(b) - 1]],
+                meta=all_state_records,
+                out_path=pca_output_path(out_dir, "pca_states", pair),
+                title="Hidden states (key_path)",
+                subtitle=f"stages={sorted({r['stage'] for r in all_state_records})}",
+                pair_edges=pair_edges,
+                axis_limit=args.axis_limit,
+                x_label=pca_axis_label(int(a), pca_ratio),
+                y_label=pca_axis_label(int(b), pca_ratio),
+            )
 
     tsne_coords = compute_tsne(state_matrix, seed=args.seed, perplexity=args.perplexity)
     if tsne_coords is not None:
@@ -510,8 +674,31 @@ def main() -> None:
         )
 
     if len(all_delta_records) > 1:
-        delta_matrix = flatten_vectors(all_delta_records)
-        delta_matrix = standardize(delta_matrix)
+        delta_matrix = preprocess_features(flatten_vectors(all_delta_records), mode=args.preprocess)
+
+        pca_delta_full, pca_delta_ratio = compute_pca(
+            delta_matrix,
+            n_components=int(max_pc),
+            whiten=bool(args.pca_whiten),
+        )
+        if pca_delta_full is not None:
+            for pair in pca_pairs:
+                if max(pair) > int(pca_delta_full.shape[1]):
+                    print(
+                        f"Skipping PCA delta pair {pair}: only {int(pca_delta_full.shape[1])} components available."
+                    )
+                    continue
+                a, b = pair
+                plot_embedding(
+                    coords=pca_delta_full[:, [int(a) - 1, int(b) - 1]],
+                    meta=all_delta_records,
+                    out_path=pca_output_path(out_dir, "pca_deltas", pair),
+                    title="Delta vectors (vector_path)",
+                    subtitle=f"stages={sorted({r['stage'] for r in all_delta_records})}",
+                    axis_limit=args.axis_limit,
+                    x_label=pca_axis_label(int(a), pca_delta_ratio),
+                    y_label=pca_axis_label(int(b), pca_delta_ratio),
+                )
 
         tsne_delta = compute_tsne(delta_matrix, seed=args.seed, perplexity=args.perplexity)
         if tsne_delta is not None:
@@ -543,8 +730,7 @@ def main() -> None:
     # Layer trajectories only make sense when multiple layers exist; pick mine stage to avoid duplicates.
     mine_records = [rec for rec in all_state_records if rec["stage"] == "mine"]
     if len(mine_records) > 1 and len({r.get("layer") for r in mine_records}) > 1:
-        mine_matrix = flatten_vectors(mine_records)
-        mine_matrix = standardize(mine_matrix)
+        mine_matrix = preprocess_features(flatten_vectors(mine_records), mode=args.preprocess)
         coords = compute_tsne(mine_matrix, seed=args.seed, perplexity=args.perplexity)
         if coords is not None:
             plot_layer_trajectories(
